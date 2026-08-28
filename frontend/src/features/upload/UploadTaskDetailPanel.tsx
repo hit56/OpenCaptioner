@@ -671,7 +671,7 @@ export function UploadTaskDetailPanel({
                   type="text"
                   maxLength={200}
                   value={publishState.tags}
-                  placeholder="字幕,双语字幕,AI字幕"
+                  placeholder="#字幕 #双语字幕 #AI字幕"
                   onChange={(e) => updatePublishField('tags', e.target.value)}
                 />
               </div>

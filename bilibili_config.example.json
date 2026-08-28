@@ -17,7 +17,7 @@
   "qn": 127,
   "_comment_publish": "一键投稿默认参数。tid 分区示例：21=日常, 122=野生技能协会, 208=科技·计算机技术；copyright 1=自制 2=转载（转载需 publish_source）。",
   "publish_tid": 21,
-  "publish_tags": "字幕,双语字幕,AI字幕",
+  "publish_tags": "#字幕 #双语字幕 #AI字幕",
   "publish_copyright": 1,
   "publish_no_reprint": 1,
   "publish_source": ""

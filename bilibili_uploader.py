@@ -42,7 +42,7 @@ HEADERS = {
 # 日常分区；可通过配置 publish_tid 覆盖。常见分区：
 # 21=日常, 122=野生技能协会, 208=科技·计算机技术, 17=单机游戏, 65=网络游戏
 DEFAULT_TID = 21
-DEFAULT_TAGS = "字幕,双语字幕,AI字幕"
+DEFAULT_TAGS = "#字幕 #双语字幕 #AI字幕"
 MAX_TITLE_LEN = 80
 CHUNK_FALLBACK = 4 * 1024 * 1024  # 4 MiB
 
@@ -358,7 +358,7 @@ def submit_archive(
 ) -> dict:
     """提交稿件，成功返回含 aid/bvid 的 data。"""
     title = sanitize_title(title)
-    tag = (tag or DEFAULT_TAGS).strip() or DEFAULT_TAGS
+    tag = _tags_for_bilibili_api(tag)
     desc = (desc or "").strip()
     if copyright == 2 and not source:
         raise BiliUploadError("转载稿件必须填写来源 source")
@@ -559,10 +559,10 @@ _META_SYSTEM_PROMPT = """你是哔哩哔哩（B站）投稿文案助手。
 根据视频转写文本，生成适合 B 站投稿的标题、简介与标签。
 要求：
 1. 只输出一个 JSON 对象，必须同时包含 title、desc、tags 三个字段；不要输出多个 JSON，不要 Markdown，不要其它说明文字。
-2. 正确示例：{"title":"...","desc":"...","tags":"标签1,标签2,标签3"}
+2. 正确示例：{"title":"...","desc":"...","tags":"#标签1 #标签2 #标签3"}
 3. title：吸引点击、信息准确，不超过 80 字，不要加书名号或引号包裹整句。
 4. desc：2～5 句简介，概括内容亮点，不超过 500 字；可用 \\n 表示换行。
-5. tags：3～8 个中文标签，用英文逗号分隔，例如「科技,教程,字幕」。
+5. tags：3～8 个中文标签，每个以井号 # 开头、中间用空格分隔，例如「#科技 #教程 #字幕」。
 6. 不要编造转写中不存在的事实；不要出现违法违规内容。"""
 
 
@@ -654,16 +654,36 @@ def _parse_meta_json(text: str) -> dict:
     return {}
 
 
-def _normalize_meta_tags(raw) -> str:
+def _split_meta_tag_parts(raw) -> list[str]:
+    """从逗号 / 空格 / 井号混排文本中拆出标签词。"""
     if raw is None:
-        return ""
+        return []
     if isinstance(raw, list):
-        parts = [str(x).strip() for x in raw if str(x).strip()]
-        return ",".join(parts[:10])
-    text = str(raw).strip()
-    text = text.replace("，", ",").replace("、", ",")
-    parts = [p.strip() for p in text.split(",") if p.strip()]
-    return ",".join(parts[:10])
+        text = " ".join(str(x).strip() for x in raw if str(x).strip())
+    else:
+        text = str(raw).strip()
+    if not text:
+        return []
+    text = text.replace("，", " ").replace("、", " ").replace(",", " ")
+    parts: list[str] = []
+    for token in text.split():
+        token = token.strip().lstrip("#").strip()
+        if token:
+            parts.append(token)
+        if len(parts) >= 10:
+            break
+    return parts
+
+
+def _normalize_meta_tags(raw) -> str:
+    """展示/复制用：#音乐 #情感 #歌词。兼容旧的逗号分隔缓存。"""
+    return " ".join(f"#{p}" for p in _split_meta_tag_parts(raw))
+
+
+def _tags_for_bilibili_api(raw) -> str:
+    """B 站投稿接口要求逗号分隔、不含 #。"""
+    parts = _split_meta_tag_parts(raw) or _split_meta_tag_parts(DEFAULT_TAGS)
+    return ",".join(parts)
 
 
 def generate_publish_meta(
