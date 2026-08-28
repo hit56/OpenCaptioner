@@ -12,11 +12,13 @@
 
 OpenCaptioner 烧录双语字幕后的样例视频：
 
-<video src="docs/demo-subtitled.mp4" poster="docs/demo-poster.jpg" width="720" controls playsinline></video>
+<video src="https://github.com/hit56/OpenCaptioner/raw/main/20260828011253_0eebd554_subtitled.mp4" poster="docs/demo-poster.jpg" width="720" controls playsinline>
+  <source src="20260828011253_0eebd554_subtitled.mp4" type="video/mp4">
+</video>
 
-[![OpenCaptioner 字幕成片示例](docs/demo-poster.jpg)](docs/demo-subtitled.mp4)
+[![OpenCaptioner 字幕成片示例](docs/demo-poster.jpg)](20260828011253_0eebd554_subtitled.mp4)
 
-[下载 demo.mp4](docs/demo-subtitled.mp4)
+[下载 demo.mp4](20260828011253_0eebd554_subtitled.mp4)
 
 ## 功能
 

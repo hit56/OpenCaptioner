@@ -12,11 +12,13 @@ This repository is the server and web frontend. **It does not ship model weights
 
 A subtitled video produced by OpenCaptioner (bilingual burn-in):
 
-<video src="docs/demo-subtitled.mp4" poster="docs/demo-poster.jpg" width="720" controls playsinline></video>
+<video src="https://github.com/hit56/OpenCaptioner/raw/main/20260828011253_0eebd554_subtitled.mp4" poster="docs/demo-poster.jpg" width="720" controls playsinline>
+  <source src="20260828011253_0eebd554_subtitled.mp4" type="video/mp4">
+</video>
 
-[![OpenCaptioner subtitled demo](docs/demo-poster.jpg)](docs/demo-subtitled.mp4)
+[![OpenCaptioner subtitled demo](docs/demo-poster.jpg)](20260828011253_0eebd554_subtitled.mp4)
 
-[Download demo.mp4](docs/demo-subtitled.mp4)
+[Download demo.mp4](20260828011253_0eebd554_subtitled.mp4)
 
 ## Features
 
