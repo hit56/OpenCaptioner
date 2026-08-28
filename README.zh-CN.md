@@ -12,7 +12,7 @@
 
 OpenCaptioner 烧录双语字幕后的样例：
 
-https://github.com/user-attachments/assets/373480c4-4429-40a7-9692-6c138140727a
+https://github.com/user-attachments/assets/84cc9264-a042-4342-ad35-f85f4f1939ac
 
 ## 功能
 
