@@ -1,5 +1,7 @@
 # Concurrency Benchmark
 
+**English** | [中文](#中文)
+
 Unified benchmark entry: [concurrency_benchmark.py](concurrency_benchmark.py).
 
 ## Modes
@@ -25,3 +27,13 @@ bash benchmarks/run_benchmark_3rounds.sh offline --label after -- --media warm_u
 
 - Default gateway base URL: `http://127.0.0.1:7860` (`BENCH_BASE_URL`)
 - Use a representative media file via `--media`
+
+---
+
+## 中文
+
+统一压测入口：[concurrency_benchmark.py](concurrency_benchmark.py)。
+
+- **offline**：经 `/upload` 上传，再经 `/stream_task/{task_id}` 用 SSE 等到任务结束
+- 默认网关 `http://127.0.0.1:7860`（`BENCH_BASE_URL`）
+- 用 `--media` 指定代表性音视频
