@@ -1,0 +1,13 @@
+{
+  "_comment": "YouTube 下载配置示例。复制为 youtube_config.json 后填入本机/生产值（已 gitignore）。",
+  "_comment_remote": "推荐：自建 YouTube 下载服务（同步接口返回视频流）。配置后优先于本机 yt-dlp。",
+  "remote_api_url": "http://your-download-host:8078/api/youtube/download/sync",
+  "remote_api_token": "",
+  "remote_api_proxy": "",
+  "remote_timeout_sec": 600,
+  "_comment_local": "未配置 remote_api_* 时回退本机 yt-dlp（需 Node、出口代理等，见 README）。",
+  "proxy": "",
+  "cookies_file": "",
+  "node_path": "",
+  "max_height": 0
+}

@@ -1,0 +1,41 @@
+FireRedASR Streaming
+Copyright 2026 洞见智擎
+
+This product's original source code is licensed under the Apache License, Version 2.0.
+
+This product uses or interoperates with third-party software and models
+that are not distributed in this repository. Those components remain under
+their own licenses, including:
+
+- FireRedASR / FireRedASR2S
+  Copyright FireRedTeam
+  Apache License 2.0
+  https://github.com/FireRedTeam/FireRedASR
+  https://github.com/FireRedTeam/FireRedASR2S
+
+- Qwen3-ASR, Qwen3-ForcedAligner, qwen-asr
+  Copyright Alibaba Cloud / Qwen
+  Apache License 2.0
+  https://github.com/QwenLM/Qwen3-ASR
+  https://huggingface.co/Qwen/Qwen3-ASR-1.7B
+
+- Qwen3 and Qwen3-Embedding
+  Copyright Alibaba Cloud / Qwen
+  Apache License 2.0
+  https://huggingface.co/Qwen/Qwen3-8B
+  https://huggingface.co/Qwen/Qwen3-Embedding-8B
+
+- SenseVoice, CAM++ / CampPlus, FunASR punctuation
+  Copyright FunASR / FunAudioLLM / Alibaba
+  Their respective licenses (see ModelScope / Hugging Face model cards)
+  https://github.com/FunAudioLLM/SenseVoice
+  https://github.com/modelscope/FunASR
+
+- llama.cpp
+  Copyright ggml-org contributors
+  MIT License
+  https://github.com/ggml-org/llama.cpp
+
+Model weights, the FireRedASR2S checkout, llama-server, and subtitle fonts
+are not included in this git repository. Download them separately and
+comply with each project's license and model card.

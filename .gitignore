@@ -1,0 +1,95 @@
+./benchmarks/results/
+./benchmarks/__pycache__
+FireRedASR/
+# =========================================
+# 基础 Python 配置 (你原有的)
+# =========================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+.env/
+env/
+
+# 本地密钥（含 SMTP 密码、内部地址、OAuth）
+smtp.env
+.env.local
+*.secret
+
+# 内容审核词表（含敏感词，仅保留 README / *.example）
+dict/*.dict
+
+# 哔哩哔哩下载账号配置（含 SESSDATA / 密码），仅保留 example 模板
+bilibili_config.json
+member.bilibili.com_cookies.txt
+*_cookies.txt
+
+# YouTube 下载配置（含代理 / cookies 路径），仅保留 example 模板
+youtube_config.json
+
+# 抖音下载配置（含 cookies 路径），仅保留 example 模板
+douyin_config.json
+douyin_cookies.txt
+
+
+# Logs and Data
+logs/
+saved_data/
+
+# =========================================
+# 新增：AI 模型与语音项目专属配置
+# =========================================
+
+# 1. 音频测试文件与标注数据 (避免把测试语音传到云端)
+*.wav
+*.mp3
+*.flac
+*.m4a
+*.rttm
+
+# 2. 深度学习模型权重 (体积极大，绝对不要提交到 Git)
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+*.mdl
+*.msc
+*.mv
+
+# 3. 预训练模型目录 (建议整个目录忽略)
+pretrained_models/
+
+# 4. 编译产生的二进制可执行文件或 Python 安装包
+*.whl
+llama-server
+
+# 5. 字体（微软雅黑等专有字体勿入库；字幕字体由部署方自行安装）
+*.ttf
+
+# 其它 PNG 默认忽略；前端品牌图必须入库，否则 npm run build 失败
+*.png
+!frontend/src/assets/brand-logo.png
+!frontend/src/assets/home-hero-bg.png
+
+# 6. 操作系统或编辑器产生的临时/缓存文件
+.DS_Store
+.vscode/
+
+fireredasr2s
+AI4Science_ASR_TEST/
+
+# Claude Code 配置
+CLAUDE.md
+resource
+lib
+ws_server
+
+.cursor/
+.analysis_frames/
+logs_duix
+.claude

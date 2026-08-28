@@ -1,0 +1,7 @@
+{
+  "_comment": "抖音下载配置示例。复制本文件为 douyin_config.json 后按需填写。",
+  "_comment_cookies": "部分视频需新鲜浏览器 cookies（含 s_v_web_id，不必登录）。导出 Netscape/cookies.txt 后填入路径。",
+  "cookies_file": "",
+  "_comment_max_height": "清晰度高度上限，如 720 / 1080；省略或 0 表示不限制，选可用最高档。",
+  "max_height": 0
+}

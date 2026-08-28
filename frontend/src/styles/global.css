@@ -1,0 +1,265 @@
+@import './legacy.css';
+
+:root {
+  --sidebar-width-expanded: 240px;
+  --content-top-offset: 10px;
+  --sidebar-toggle-size: 36px;
+  --sidebar-toggle-gap: 12px;
+}
+
+/* React mount: inherit original body flex layout */
+#root {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.page-shell {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+}
+
+.page-shell .main-content {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (min-width: 901px) {
+  .page-shell .main-content {
+    padding-top: var(--content-top-offset);
+  }
+
+  /* 侧边栏收起时，为左上角固定按钮留出空间，避免与主内容重叠 */
+  .page-shell.sidebar-collapsed .main-content {
+    padding-left: calc(
+      var(--content-top-offset) + var(--sidebar-toggle-size) + var(--sidebar-toggle-gap)
+    );
+  }
+}
+
+/* Hide test tab until secret trigger (match legacy behavior) */
+.tab-btn.tab-test-hidden {
+  display: none;
+}
+
+.tab-btn.tab-test-visible {
+  display: flex;
+}
+
+/* --- Sidebar toggle (desktop) --- */
+.sidebar-toggle-btn {
+  display: none;
+  position: fixed;
+  top: var(--content-top-offset);
+  left: 10px;
+  width: var(--sidebar-toggle-size);
+  height: var(--sidebar-toggle-size);
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  z-index: 1001;
+  box-shadow: none;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+  transition: color 0.2s ease;
+}
+
+.sidebar-toggle-btn:hover {
+  color: var(--primary-color);
+  background: transparent;
+}
+
+.sidebar-toggle-btn svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+@media (min-width: 901px) {
+  .sidebar-toggle-btn {
+    display: inline-flex;
+  }
+}
+
+/* --- Sidebar open / hidden (desktop) --- */
+.sidebar {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: var(--sidebar-current-width, var(--sidebar-width-expanded));
+  transition: width 0.22s ease;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.sidebar--open {
+  --sidebar-current-width: var(--sidebar-width-expanded);
+}
+
+.sidebar--hidden {
+  --sidebar-current-width: 0;
+  width: 0;
+  border-right: none;
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar {
+    transition: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .sidebar,
+  .sidebar--open,
+  .sidebar--hidden {
+    --sidebar-current-width: var(--sidebar-width-expanded);
+    width: var(--sidebar-width-expanded);
+    border-right: 1px solid var(--border-color);
+    box-shadow: 2px 0 8px rgba(0, 0, 0, 0.03);
+  }
+}
+
+@media (max-width: 600px) {
+  .sidebar,
+  .sidebar--open,
+  .sidebar--hidden {
+    --sidebar-current-width: 220px;
+    width: 220px;
+  }
+}
+
+/* --- Sidebar upload history (collapsible under 文件上传) --- */
+.sidebar-upload-history {
+  --upload-history-visible-count: 6;
+  --upload-history-item-slot: 72px;
+  --upload-history-item-gap: 8px;
+  --upload-history-list-pad-top: 6px;
+  --upload-history-footer-height: 45px;
+  --upload-history-list-viewport: calc(
+    var(--upload-history-visible-count) * var(--upload-history-item-slot)
+      + (var(--upload-history-visible-count) - 1) * var(--upload-history-item-gap)
+  );
+  max-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: max-height 0.25s ease, opacity 0.2s ease;
+  flex-shrink: 0;
+}
+
+.sidebar-upload-history.expanded {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: none;
+  opacity: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-upload-history .upload-history-panel {
+  flex: 0 0 auto;
+  height: calc(
+    var(--upload-history-list-pad-top) + var(--upload-history-list-viewport)
+  );
+  min-height: calc(
+    var(--upload-history-list-pad-top) + var(--upload-history-list-viewport)
+  );
+  max-height: calc(
+    var(--upload-history-list-pad-top) + var(--upload-history-list-viewport)
+  );
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: none;
+  border-top: 1px solid var(--border-color);
+  border-radius: 0;
+  background: #fafbfc;
+}
+
+.sidebar-upload-history .upload-history-panel--has-footer {
+  height: calc(
+    var(--upload-history-list-pad-top) + var(--upload-history-list-viewport)
+      + var(--upload-history-footer-height)
+  );
+  min-height: calc(
+    var(--upload-history-list-pad-top) + var(--upload-history-list-viewport)
+      + var(--upload-history-footer-height)
+  );
+  max-height: calc(
+    var(--upload-history-list-pad-top) + var(--upload-history-list-viewport)
+      + var(--upload-history-footer-height)
+  );
+}
+
+.sidebar-upload-history .upload-history-header {
+  display: none;
+}
+
+.sidebar-upload-history .upload-history-list {
+  flex: 0 0 auto;
+  height: var(--upload-history-list-viewport);
+  min-height: var(--upload-history-list-viewport);
+  max-height: var(--upload-history-list-viewport);
+  box-sizing: content-box;
+  padding: var(--upload-history-list-pad-top) 14px 0 28px;
+  overflow-x: hidden;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.sidebar-upload-history .upload-history-list--scrollable {
+  overflow-y: auto;
+}
+
+.sidebar-upload-history .upload-history-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-upload-history .upload-history-list::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+.sidebar-upload-history .upload-history-more {
+  flex-shrink: 0;
+  margin-bottom: 0;
+  box-sizing: border-box;
+}
+
+.sidebar-upload-history .upload-history-item {
+  margin-bottom: var(--upload-history-item-gap);
+  min-height: var(--upload-history-item-slot);
+  max-height: var(--upload-history-item-slot);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.sidebar-upload-history .upload-history-item:last-child {
+  margin-bottom: 0;
+}
+
+.sidebar-upload-history .upload-history-empty {
+  padding: 16px 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-upload-history {
+    transition: none;
+  }
+}
