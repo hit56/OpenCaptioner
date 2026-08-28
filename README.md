@@ -6,6 +6,8 @@ Offline speech transcription: upload audio/video or paste a Bilibili / YouTube /
 
 This repository is the server and web frontend. **It does not ship model weights.** Mandarin, English, and Cantonese default to [FireRedASR2S](https://github.com/FireRedTeam/FireRedASR2S). Other languages and sung content use [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR).
 
+**Live demo:** [https://www.scnet.cn/ui/aihub/agent/zhenghong/asr](https://www.scnet.cn/ui/aihub/agent/zhenghong/asr) (SCNet AI Hub; sign in with an SCNet account)
+
 ## Features
 
 - File upload and link download (Bilibili / YouTube / Douyin)

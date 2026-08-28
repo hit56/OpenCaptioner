@@ -6,6 +6,8 @@
 
 本仓库是服务端与 Web 前端，**不包含模型权重**。中英粤默认走 [FireRedASR2S](https://github.com/FireRedTeam/FireRedASR2S)，其它语种与歌曲内容走 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR)。
 
+**试用地址：** [https://www.scnet.cn/ui/aihub/agent/zhenghong/asr](https://www.scnet.cn/ui/aihub/agent/zhenghong/asr)（超算互联网 AIHub，使用 SCNet 账号登录）
+
 ## 功能
 
 - 文件上传与链接解析下载（哔哩哔哩 / YouTube / 抖音）
