@@ -10,15 +10,9 @@
 
 ### 成片示例
 
-OpenCaptioner 烧录双语字幕后的样例。点击封面即可播放：
+OpenCaptioner 烧录双语字幕后的样例：
 
-<p align="center">
-  <a href="https://github.com/hit56/OpenCaptioner/blob/main/docs/demo-subtitled.mp4">
-    <img src="docs/demo-poster.jpg" width="320" alt="OpenCaptioner 字幕成片示例" />
-  </a>
-</p>
-
-**[▶ 播放样例](https://github.com/hit56/OpenCaptioner/blob/main/docs/demo-subtitled.mp4)** · [下载 MP4](docs/demo-subtitled.mp4)
+https://github.com/user-attachments/assets/373480c4-4429-40a7-9692-6c138140727a
 
 ## 功能
 

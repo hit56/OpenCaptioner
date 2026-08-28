@@ -1,7 +1,3 @@
-
-
-https://github.com/user-attachments/assets/373480c4-4429-40a7-9692-6c138140727a
-
 # OpenCaptioner
 
 **English** | [中文](README.zh-CN.md)
@@ -14,15 +10,9 @@ This repository is the server and web frontend. **It does not ship model weights
 
 ### Sample output
 
-A subtitled video produced by OpenCaptioner (bilingual burn-in). Click the image to play:
+A subtitled video produced by OpenCaptioner (bilingual burn-in):
 
-<p align="center">
-  <a href="https://github.com/hit56/OpenCaptioner/blob/main/docs/demo-subtitled.mp4">
-    <img src="docs/demo-poster.jpg" width="320" alt="OpenCaptioner subtitled demo" />
-  </a>
-</p>
-
-**[▶ Play sample](https://github.com/hit56/OpenCaptioner/blob/main/docs/demo-subtitled.mp4)** · [Download MP4](docs/demo-subtitled.mp4)
+https://github.com/user-attachments/assets/373480c4-4429-40a7-9692-6c138140727a
 
 ## Features
 
