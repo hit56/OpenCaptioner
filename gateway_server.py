@@ -3097,6 +3097,93 @@ async def task_chat(
     )
 
 
+_subtitle_reburn_jobs: dict[str, dict] = {}
+_subtitle_reburn_locks: dict[str, asyncio.Lock] = {}
+
+
+def _reburn_lock_for(task_id: str) -> asyncio.Lock:
+    lock = _subtitle_reburn_locks.get(task_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _subtitle_reburn_locks[task_id] = lock
+    return lock
+
+
+def _enqueue_subtitle_reburn(task_id: str, original_filename: str, ui_language: str) -> str:
+    """立刻记下 job，再把 ffmpeg 刻印丢到后台，避免同步 HTTP 被前置网关超时。"""
+    job_id = uuid.uuid4().hex
+    _subtitle_reburn_jobs[task_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "error": None,
+        "video_url": None,
+    }
+    asyncio.create_task(
+        _run_subtitle_reburn_job(task_id, original_filename, ui_language, job_id)
+    )
+    return job_id
+
+
+async def _run_subtitle_reburn_job(
+    task_id: str,
+    original_filename: str,
+    ui_language: str,
+    job_id: str,
+):
+    lock = _reburn_lock_for(task_id)
+    async with lock:
+        job = _subtitle_reburn_jobs.get(task_id) or {}
+        if job.get("job_id") != job_id:
+            return
+        job["status"] = "running"
+        server_log.logger.info(f"[{task_id}] 开始后台重新刻印字幕视频 job={job_id}")
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None,
+                auto_generate_subtitle_video_sync,
+                task_id,
+                original_filename,
+                ui_language,
+            )
+            video_url = result.get("url") if isinstance(result, dict) else None
+            current = _subtitle_reburn_jobs.get(task_id) or {}
+            if current.get("job_id") != job_id:
+                return
+            if not video_url:
+                current["status"] = "error"
+                current["error"] = "字幕视频重新刻印失败，请稍后重试。"
+                await task_manager.broadcast(task_id, {
+                    "type": "error",
+                    "message": "字幕视频重新刻印失败，请稍后重试。",
+                })
+                return
+
+            canonical_url = f"/media/{task_id}/subtitled"
+            _update_upload_task_row(task_id, video_url=canonical_url, status="done")
+            current["status"] = "done"
+            current["error"] = None
+            current["video_url"] = canonical_url
+            rebuilt = _load_final_results_list(task_id)
+            await task_manager.broadcast(task_id, {
+                "type": "subtitle_updated",
+                "video_url": canonical_url,
+                "final_segments": _final_segments_payload(rebuilt),
+                "message": "字幕已更新并重新刻印完成",
+            })
+            server_log.logger.info(f"[{task_id}] 后台重新刻印完成 job={job_id}")
+        except Exception as e:
+            server_log.logger.error(f"[{task_id}] 字幕重新刻印失败: {e}")
+            current = _subtitle_reburn_jobs.get(task_id) or {}
+            if current.get("job_id") == job_id:
+                current["status"] = "error"
+                current["error"] = str(e) or "字幕视频重新刻印失败"
+            await task_manager.broadcast(task_id, {
+                "type": "error",
+                "message": f"字幕视频重新刻印失败：{e}",
+            })
+
+
 class SubtitleEditSegment(BaseModel):
     index: int
     text: str
@@ -3147,49 +3234,19 @@ async def edit_task_subtitles(
     original_filename = (task_row or {}).get("file_name") or ""
     ui_language = payload.ui_language or "zh-CN"
 
+    server_log.logger.info(
+        f"[{task_id}] 字幕片段已保存，提交后台重新刻印 changed={changed_count}"
+    )
     await task_manager.broadcast(task_id, {
         "type": "subtitle_reburn_progress",
         "message": "正在重新刻印字幕视频……",
     })
-
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            auto_generate_subtitle_video_sync,
-            task_id,
-            original_filename,
-            ui_language,
-        )
-    except Exception as e:
-        server_log.logger.error(f"[{task_id}] 字幕重新刻印失败: {e}")
-        await task_manager.broadcast(task_id, {
-            "type": "error",
-            "message": f"字幕视频重新刻印失败：{e}",
-        })
-        raise HTTPException(status_code=500, detail="字幕视频重新刻印失败")
-
-    video_url = result.get("url")
-    if not video_url:
-        await task_manager.broadcast(task_id, {
-            "type": "error",
-            "message": "字幕视频重新刻印失败，请稍后重试。",
-        })
-        raise HTTPException(status_code=500, detail="字幕视频重新刻印失败")
-
-    canonical_url = f"/media/{task_id}/subtitled"
-    _update_upload_task_row(task_id, video_url=canonical_url, status="done")
-
-    await task_manager.broadcast(task_id, {
-        "type": "subtitle_updated",
-        "video_url": canonical_url,
-        "final_segments": _final_segments_payload(final_results_list),
-        "message": "字幕已更新并重新刻印完成",
-    })
-
+    job_id = _enqueue_subtitle_reburn(task_id, original_filename, ui_language)
     return {
         "ok": True,
-        "video_url": canonical_url,
+        "reburning": True,
+        "job_id": job_id,
+        "video_url": f"/media/{task_id}/subtitled",
         "changed_segments": changed_count,
     }
 
@@ -3380,47 +3437,38 @@ async def save_task_subtitle_cues(
     original_filename = (task_row or {}).get("file_name") or ""
     ui_language = payload.ui_language or "zh-CN"
 
+    server_log.logger.info(
+        f"[{task_id}] 字幕 cue 已保存，提交后台重新刻印 count={len(cues)}"
+    )
     await task_manager.broadcast(task_id, {
         "type": "subtitle_reburn_progress",
         "message": "正在重新刻印字幕视频……",
     })
+    job_id = _enqueue_subtitle_reburn(task_id, original_filename, ui_language)
+    return {
+        "ok": True,
+        "reburning": True,
+        "job_id": job_id,
+        "video_url": f"/media/{task_id}/subtitled",
+        "cue_count": len(cues),
+    }
 
-    loop = asyncio.get_running_loop()
-    try:
-        result = await loop.run_in_executor(
-            None,
-            auto_generate_subtitle_video_sync,
-            task_id,
-            original_filename,
-            ui_language,
-        )
-    except Exception as e:
-        server_log.logger.error(f"[{task_id}] 字幕重新刻印失败: {e}")
-        await task_manager.broadcast(task_id, {
-            "type": "error",
-            "message": f"字幕视频重新刻印失败：{e}",
-        })
-        raise HTTPException(status_code=500, detail="字幕视频重新刻印失败")
 
-    video_url = result.get("url")
-    if not video_url:
-        await task_manager.broadcast(task_id, {
-            "type": "error",
-            "message": "字幕视频重新刻印失败，请稍后重试。",
-        })
-        raise HTTPException(status_code=500, detail="字幕视频重新刻印失败")
-
-    canonical_url = f"/media/{task_id}/subtitled"
-    _update_upload_task_row(task_id, video_url=canonical_url, status="done")
-
-    await task_manager.broadcast(task_id, {
-        "type": "subtitle_updated",
-        "video_url": canonical_url,
-        "final_segments": _final_segments_payload(rebuilt),
-        "message": "字幕已更新并重新刻印完成",
-    })
-
-    return {"ok": True, "video_url": canonical_url, "cue_count": len(cues)}
+@app.get("/task/{task_id}/subtitles/reburn-status")
+async def get_subtitle_reburn_status(
+    task_id: str,
+    client_user_id: str | None = Query(None),
+):
+    """查询后台重新刻印进度。保存接口立即返回后，前端靠这个接口等到刻印完成。"""
+    if not await task_manager.verify_access(task_id, client_user_id):
+        raise HTTPException(status_code=403, detail="无权访问该任务")
+    job = _subtitle_reburn_jobs.get(task_id) or {}
+    return {
+        "status": job.get("status") or "idle",
+        "job_id": job.get("job_id"),
+        "error": job.get("error"),
+        "video_url": job.get("video_url"),
+    }
 
 
 class ClientClickLogRequest(BaseModel):

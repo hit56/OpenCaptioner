@@ -206,7 +206,17 @@ export interface SaveAndReburnResult {
   ok?: boolean
   video_url?: string | null
   changed_segments?: number
+  cue_count?: number
   detail?: string
+  reburning?: boolean
+  job_id?: string
+}
+
+interface SubtitleReburnStatus {
+  status?: 'idle' | 'queued' | 'running' | 'done' | 'error' | string
+  job_id?: string | null
+  error?: string | null
+  video_url?: string | null
 }
 
 export interface SubtitleCuePayload {
@@ -272,30 +282,84 @@ export async function fetchSubtitleCuesDraftVtt(
   }
 }
 
-/** 保存时间轴编辑器的 cue 列表并重新刻印视频。 */
+/** 保存时间轴编辑器的 cue 列表；刻印在后台进行，这里轮询直到完成。 */
 export async function saveSubtitleCues(
   taskId: string,
   cues: SubtitleCuePayload[],
   uiLanguage: string,
 ): Promise<SaveAndReburnResult> {
   const params = new URLSearchParams({ client_user_id: getOrCreateClientUserId() })
+  const headers = authHeaders()
+  headers.set('Content-Type', 'application/json')
   const response = await fetch(
     `/task/${encodeURIComponent(taskId)}/subtitles/cues/save?${params.toString()}`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeaders() },
+      headers,
       body: JSON.stringify({ cues, ui_language: uiLanguage }),
     },
   )
   const text = await response.text()
   if (!response.ok) {
+    if (response.status === 502 || response.status === 504) {
+      throw new Error('网关超时，请稍后刷新查看字幕视频是否已更新')
+    }
     throw new Error(parseUploadErrorDetail(text, '字幕保存失败'))
   }
+  let accepted: SaveAndReburnResult = {}
   try {
-    return JSON.parse(text) as SaveAndReburnResult
+    accepted = JSON.parse(text) as SaveAndReburnResult
   } catch {
-    return {} as SaveAndReburnResult
+    accepted = {}
   }
+  if (!accepted.reburning || !accepted.job_id) {
+    return accepted
+  }
+  return waitForSubtitleReburn(taskId, accepted)
+}
+
+const REBURN_POLL_MS = 1500
+const REBURN_TIMEOUT_MS = 20 * 60 * 1000
+
+async function waitForSubtitleReburn(
+  taskId: string,
+  accepted: SaveAndReburnResult,
+): Promise<SaveAndReburnResult> {
+  const params = new URLSearchParams({ client_user_id: getOrCreateClientUserId() })
+  const started = Date.now()
+  while (Date.now() - started < REBURN_TIMEOUT_MS) {
+    await new Promise((resolve) => window.setTimeout(resolve, REBURN_POLL_MS))
+    let status: SubtitleReburnStatus
+    try {
+      const response = await fetch(
+        `/task/${encodeURIComponent(taskId)}/subtitles/reburn-status?${params.toString()}`,
+        { headers: authHeaders() },
+      )
+      if (!response.ok) {
+        throw new Error(parseUploadErrorDetail(await response.text(), '查询刻印状态失败'))
+      }
+      status = (await parseJsonSafe<SubtitleReburnStatus>(response)) || {}
+    } catch (err) {
+      if (Date.now() - started > 15_000) throw err
+      continue
+    }
+    const phase = status.status || 'idle'
+    if (phase === 'done') {
+      return {
+        ...accepted,
+        ok: true,
+        reburning: false,
+        video_url: status.video_url || accepted.video_url,
+      }
+    }
+    if (phase === 'error') {
+      throw new Error(status.error || '字幕视频重新刻印失败')
+    }
+    if (phase === 'idle' && Date.now() - started > 15_000) {
+      throw new Error('刻印状态丢失，请刷新后重试')
+    }
+  }
+  throw new Error('重新刻印超时，请稍后刷新查看字幕视频是否已更新')
 }
 
 export interface BilibiliPublishStartResult {
