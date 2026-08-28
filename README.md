@@ -8,6 +8,16 @@ This repository is the server and web frontend. **It does not ship model weights
 
 **Live demo:** [https://www.scnet.cn/ui/aihub/agent/zhenghong/asr](https://www.scnet.cn/ui/aihub/agent/zhenghong/asr) (SCNet AI Hub; sign in with an SCNet account)
 
+### Sample output
+
+A subtitled video produced by OpenCaptioner (bilingual burn-in):
+
+<video src="docs/demo-subtitled.mp4" poster="docs/demo-poster.jpg" width="720" controls playsinline></video>
+
+[![OpenCaptioner subtitled demo](docs/demo-poster.jpg)](docs/demo-subtitled.mp4)
+
+[Download demo.mp4](docs/demo-subtitled.mp4)
+
 ## Features
 
 - File upload and link download (Bilibili / YouTube / Douyin)

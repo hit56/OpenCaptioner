@@ -8,6 +8,16 @@
 
 **试用地址：** [https://www.scnet.cn/ui/aihub/agent/zhenghong/asr](https://www.scnet.cn/ui/aihub/agent/zhenghong/asr)（超算互联网 AIHub，使用 SCNet 账号登录）
 
+### 成片示例
+
+OpenCaptioner 烧录双语字幕后的样例视频：
+
+<video src="docs/demo-subtitled.mp4" poster="docs/demo-poster.jpg" width="720" controls playsinline></video>
+
+[![OpenCaptioner 字幕成片示例](docs/demo-poster.jpg)](docs/demo-subtitled.mp4)
+
+[下载 demo.mp4](docs/demo-subtitled.mp4)
+
 ## 功能
 
 - 文件上传与链接解析下载（哔哩哔哩 / YouTube / 抖音）
