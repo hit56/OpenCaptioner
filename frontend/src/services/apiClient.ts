@@ -318,6 +318,23 @@ export interface BilibiliPublishStatus {
   error?: string | null
 }
 
+export type PublishCoverKind = 'generated' | 'frame_start' | 'frame_middle' | 'frame_end'
+
+const PUBLISH_COVER_KINDS: PublishCoverKind[] = [
+  'generated',
+  'frame_start',
+  'frame_middle',
+  'frame_end',
+]
+
+function parseCoverKind(value: unknown): PublishCoverKind | null {
+  if (value === 'frame') return 'frame_middle'
+  if (typeof value === 'string' && (PUBLISH_COVER_KINDS as string[]).includes(value)) {
+    return value as PublishCoverKind
+  }
+  return null
+}
+
 export interface BilibiliPublishMeta {
   task_id?: string
   title: string
@@ -326,6 +343,12 @@ export interface BilibiliPublishMeta {
   cached?: boolean
   cover_url?: string | null
   cover_available?: boolean
+  cover_generated_available?: boolean
+  cover_frame_available?: boolean
+  cover_frames_available?: Partial<Record<'frame_start' | 'frame_middle' | 'frame_end', boolean>>
+  cover_selected?: PublishCoverKind | null
+  cover_generated_url?: string | null
+  cover_frame_urls?: Partial<Record<'frame_start' | 'frame_middle' | 'frame_end', string>>
 }
 
 /** 获取投稿标题 / 简介 / 标签；默认复用缓存，refresh=true 强制重新生成。 */
@@ -353,6 +376,12 @@ export async function fetchBilibiliPublishMeta(
       cached: Boolean(data.cached),
       cover_url: data.cover_url || null,
       cover_available: Boolean(data.cover_available),
+      cover_generated_available: Boolean(data.cover_generated_available),
+      cover_frame_available: Boolean(data.cover_frame_available),
+      cover_frames_available: data.cover_frames_available || {},
+      cover_selected: parseCoverKind(data.cover_selected),
+      cover_generated_url: data.cover_generated_url || null,
+      cover_frame_urls: data.cover_frame_urls || {},
     }
   } catch {
     throw new Error('生成投稿文案失败')
@@ -362,10 +391,15 @@ export async function fetchBilibiliPublishMeta(
 export interface BilibiliPublishCoverResult {
   task_id?: string
   cover_url?: string
+  cover_kind?: PublishCoverKind | 'frame'
   cached?: boolean
+  cover_generated_available?: boolean
+  cover_frame_available?: boolean
+  cover_frames_available?: Partial<Record<'frame_start' | 'frame_middle' | 'frame_end', boolean>>
+  cover_selected?: PublishCoverKind | null
 }
 
-/** 根据摘要核心生成投稿封面（Qwen-Image）。 */
+/** 生成投稿封面：source=generated 文生图；source=frame 从原视频随机抽三帧。 */
 export async function generateBilibiliPublishCover(
   taskId: string,
   options: {
@@ -373,9 +407,11 @@ export async function generateBilibiliPublishCover(
     desc?: string
     tags?: string
     refresh?: boolean
+    source?: 'generated' | 'frame'
   } = {},
 ): Promise<BilibiliPublishCoverResult> {
   const params = new URLSearchParams({ client_user_id: getOrCreateClientUserId() })
+  const source = options.source === 'frame' ? 'frame' : 'generated'
   const response = await fetch(
     `/task/${encodeURIComponent(taskId)}/publish_bilibili/cover?${params.toString()}`,
     {
@@ -386,25 +422,26 @@ export async function generateBilibiliPublishCover(
         desc: options.desc,
         tags: options.tags,
         refresh: Boolean(options.refresh),
+        source,
         client_user_id: getOrCreateClientUserId(),
       }),
     },
   )
   const text = await response.text()
   if (!response.ok) {
-    throw new Error(parseUploadErrorDetail(text, '封面生成失败'))
+    throw new Error(parseUploadErrorDetail(text, source === 'frame' ? '抽帧封面失败' : '封面生成失败'))
   }
   try {
     return JSON.parse(text) as BilibiliPublishCoverResult
   } catch {
-    return { cover_url: `/media/${taskId}/publish_cover`, cached: false }
+    return { cover_url: `/media/${taskId}/publish_cover?kind=${source}`, cover_kind: source, cached: false }
   }
 }
 
 /** 保存用户编辑后的投稿文案，供下次直接复用。 */
 export async function saveBilibiliPublishMeta(
   taskId: string,
-  meta: { title: string; desc?: string; tags?: string },
+  meta: { title: string; desc?: string; tags?: string; cover_kind?: PublishCoverKind },
 ): Promise<BilibiliPublishMeta> {
   const params = new URLSearchParams({ client_user_id: getOrCreateClientUserId() })
   const response = await fetch(
@@ -416,6 +453,7 @@ export async function saveBilibiliPublishMeta(
         title: meta.title,
         desc: meta.desc,
         tags: meta.tags,
+        cover_kind: meta.cover_kind,
         client_user_id: getOrCreateClientUserId(),
       }),
     },

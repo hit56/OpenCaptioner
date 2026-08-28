@@ -16,7 +16,9 @@ import base64
 import json
 import math
 import os
+import random
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -150,7 +152,13 @@ def _report(progress: ProgressCallback, message: str, ratio: float = 0.0):
             pass
 
 
-def extract_cover_jpeg(video_path: str, out_path: str, seek_sec: float = 1.0) -> str:
+def extract_cover_jpeg(
+    video_path: str,
+    out_path: str,
+    seek_sec: float = 1.0,
+    *,
+    fallback_start: bool = True,
+) -> str:
     """用 ffmpeg 截取一帧作为封面 JPEG。"""
     cmd = [
         "ffmpeg",
@@ -167,9 +175,9 @@ def extract_cover_jpeg(video_path: str, out_path: str, seek_sec: float = 1.0) ->
     ]
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
     if proc.returncode != 0 or not os.path.isfile(out_path) or os.path.getsize(out_path) < 64:
-        # 再试片头
-        cmd[4] = "0"
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        if fallback_start:
+            cmd[4] = "0"
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
     if proc.returncode != 0 or not os.path.isfile(out_path) or os.path.getsize(out_path) < 64:
         err = (proc.stderr or b"").decode("utf-8", errors="ignore")[-400:]
         raise BiliUploadError(f"无法从视频截取封面: {err}")
@@ -765,6 +773,7 @@ def load_publish_meta_cache(cache_dir: str, task_id: str, source_mtime: float | 
         "desc": str(data.get("desc") or "").strip()[:2000],
         "tags": _normalize_meta_tags(data.get("tags")),
         "cover_path": data.get("cover_path"),
+        "cover_selected": normalize_cover_kind(data.get("cover_selected"), default=""),
         "cached": True,
     }
 
@@ -778,11 +787,12 @@ def save_publish_meta_cache(
     tags: str = "",
     source_mtime: float | None = None,
     cover_path: str | None = None,
+    cover_selected: str | None = None,
 ) -> dict:
     """落盘保存投稿文案，供下次直接复用。"""
     os.makedirs(cache_dir, exist_ok=True)
     path = publish_meta_cache_path(cache_dir, task_id)
-    # 保留已有 cover_path，除非本次显式传入
+    # 保留已有 cover_path / cover_selected，除非本次显式传入
     existing = {}
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -795,6 +805,10 @@ def save_publish_meta_cache(
     resolved_cover = cover_path
     if resolved_cover is None:
         resolved_cover = existing.get("cover_path")
+    resolved_selected = cover_selected
+    if resolved_selected is None:
+        resolved_selected = existing.get("cover_selected")
+    resolved_selected = normalize_cover_kind(resolved_selected, default="")
 
     payload = {
         "title": sanitize_title(title),
@@ -803,6 +817,7 @@ def save_publish_meta_cache(
         "source_mtime": float(source_mtime) if source_mtime is not None else None,
         "updated_at": time.time(),
         "cover_path": resolved_cover,
+        "cover_selected": resolved_selected or None,
     }
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
@@ -813,6 +828,7 @@ def save_publish_meta_cache(
         "desc": payload["desc"],
         "tags": payload["tags"],
         "cover_path": payload.get("cover_path"),
+        "cover_selected": payload.get("cover_selected"),
         "cached": True,
     }
 
@@ -825,6 +841,9 @@ DEFAULT_COVER_WIDTH = 1280
 DEFAULT_COVER_HEIGHT = 720
 COVER_SUMMARY_CORE_CHARS = 800
 COVER_VISUAL_PROMPT_MAX_CHARS = 600
+COVER_FRAME_KINDS = ("frame_start", "frame_middle", "frame_end")
+COVER_KINDS = ("generated",) + COVER_FRAME_KINDS
+COVER_FRAME_COUNT = 3
 
 _COVER_NO_TEXT_RULE = (
     "no text, no letters, no Chinese characters, no numbers, no title, no subtitle, "
@@ -851,8 +870,62 @@ def resolve_cover_image_url() -> str:
     return (raw or "").strip().rstrip("/")
 
 
-def publish_cover_path(cache_dir: str, task_id: str) -> str:
+def normalize_cover_kind(value, *, default: str = "generated") -> str:
+    kind = str(value or "").strip().lower()
+    if kind == "frame":
+        kind = "frame_middle"
+    if kind in COVER_KINDS:
+        return kind
+    return default if default in COVER_KINDS or default == "" else "generated"
+
+
+def cover_file_available(path: str | None) -> bool:
+    return bool(path) and os.path.isfile(path) and os.path.getsize(path) > 64
+
+
+def publish_cover_path(cache_dir: str, task_id: str, kind: str = "generated") -> str:
+    kind = normalize_cover_kind(kind, default="generated")
+    if kind in COVER_FRAME_KINDS:
+        return os.path.join(cache_dir, f"{task_id}_publish_cover_{kind}.jpg")
     return os.path.join(cache_dir, f"{task_id}_publish_cover.png")
+
+
+def list_available_cover_kinds(cache_dir: str, task_id: str) -> list[str]:
+    return [
+        kind
+        for kind in COVER_KINDS
+        if cover_file_available(publish_cover_path(cache_dir, task_id, kind))
+    ]
+
+
+def frames_cover_available(cache_dir: str, task_id: str) -> bool:
+    return all(
+        cover_file_available(publish_cover_path(cache_dir, task_id, kind))
+        for kind in COVER_FRAME_KINDS
+    )
+
+
+def resolve_selected_cover_kind(
+    *,
+    preferred: str | None = None,
+    available: list[str] | None = None,
+    generated_ok: bool = False,
+    frame_ok: bool = False,
+) -> str:
+    kinds = list(available or [])
+    if not kinds:
+        if generated_ok:
+            kinds.append("generated")
+        if frame_ok:
+            kinds.extend(COVER_FRAME_KINDS)
+    want = normalize_cover_kind(preferred, default="generated")
+    if want in kinds:
+        return want
+    if "generated" in kinds:
+        return "generated"
+    if kinds:
+        return kinds[0]
+    return want
 
 
 def extract_summary_core(summary: str, *, max_chars: int = COVER_SUMMARY_CORE_CHARS) -> str:
@@ -1066,6 +1139,118 @@ def generate_publish_cover(
 
     return {
         "cover_path": out_path,
-        "cover_url": f"/media/{task_id}/publish_cover",
+        "cover_url": f"/media/{task_id}/publish_cover?kind=generated",
+        "cover_kind": "generated",
         "prompt": prompt,
     }
+
+
+def probe_video_duration(video_path: str) -> float:
+    proc = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=nw=1:nk=1",
+            video_path,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+    )
+    text = (proc.stdout or b"").decode("utf-8", errors="ignore").strip()
+    if proc.returncode != 0 or not text:
+        return 0.0
+    try:
+        return float(text.splitlines()[-1].strip())
+    except (ValueError, IndexError):
+        return 0.0
+
+
+def cover_sample_timestamps(duration: float, count: int = COVER_FRAME_COUNT) -> list[float]:
+    """在片中随机抽 count 帧；避开片头片尾容易黑屏的区间，并分散在不同时段。"""
+    n = max(1, int(count or COVER_FRAME_COUNT))
+    dur = max(0.0, float(duration or 0.0))
+    if dur <= 0.05:
+        return [0.0]
+    if dur < 1.5:
+        return [round(min(0.25, dur * 0.4), 3)]
+
+    margin = min(3.0, max(0.8, dur * 0.08))
+    lo = margin
+    hi = max(lo + 0.2, dur - margin)
+    span = hi - lo
+    if n == 1 or span < 0.3:
+        return [round(lo + span * random.random(), 3)]
+
+    picks: list[float] = []
+    for i in range(n):
+        a = lo + span * i / n
+        b = lo + span * (i + 1) / n
+        picks.append(a + (b - a) * (0.15 + 0.7 * random.random()))
+    return [round(t, 3) for t in picks]
+
+
+def extract_cover_frames(video_path: str, out_dir: str, timestamps: list[float]) -> list[str]:
+    os.makedirs(out_dir, exist_ok=True)
+    paths: list[str] = []
+    for i, ts in enumerate(timestamps, start=1):
+        out_path = os.path.join(out_dir, f"frame_{i:02d}.jpg")
+        try:
+            extract_cover_jpeg(video_path, out_path, seek_sec=float(ts), fallback_start=False)
+        except BiliUploadError:
+            continue
+        if cover_file_available(out_path):
+            paths.append(out_path)
+    if not paths:
+        raise BiliUploadError("无法从原视频抽取封面候选帧")
+    return paths
+
+
+def generate_publish_cover_from_frames(
+    cache_dir: str,
+    task_id: str,
+    video_path: str,
+) -> dict:
+    """从原视频随机抽取三帧，全部保存为可选封面。"""
+    if not video_path or not os.path.isfile(video_path):
+        raise BiliUploadError("找不到原视频，无法抽帧封面")
+
+    duration = probe_video_duration(video_path)
+    timestamps = cover_sample_timestamps(duration, COVER_FRAME_COUNT)
+    os.makedirs(cache_dir, exist_ok=True)
+    work_dir = tempfile.mkdtemp(prefix=f"{task_id}_cover_frames_")
+    saved: dict[str, str] = {}
+    try:
+        frames = extract_cover_frames(video_path, work_dir, timestamps)
+        for kind, src in zip(COVER_FRAME_KINDS, frames):
+            out_path = publish_cover_path(cache_dir, task_id, kind)
+            tmp_path = out_path + ".tmp"
+            shutil.copyfile(src, tmp_path)
+            os.replace(tmp_path, out_path)
+            if cover_file_available(out_path):
+                saved[kind] = out_path
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    if not saved:
+        raise BiliUploadError("抽帧封面保存失败")
+    first_kind = next(kind for kind in COVER_FRAME_KINDS if kind in saved)
+    return {
+        "cover_path": saved[first_kind],
+        "cover_url": f"/media/{task_id}/publish_cover?kind={first_kind}",
+        "cover_kind": "frame",
+        "frames": [
+            {
+                "kind": kind,
+                "cover_url": f"/media/{task_id}/publish_cover?kind={kind}",
+            }
+            for kind in COVER_FRAME_KINDS
+            if kind in saved
+        ],
+        "timestamps": timestamps,
+    }
+

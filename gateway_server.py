@@ -2314,6 +2314,63 @@ def resolve_task_media_path(session_id: str) -> tuple[str, str] | None:
     return None
 
 
+def resolve_original_video_path(session_id: str) -> str | None:
+    """投稿抽帧用原视频：优先 uploads 原片，找不到再回退字幕成片。"""
+    for path, ext in collect_upload_paths_for_session(session_id):
+        if ext in VIDEO_EXTENSIONS and os.path.isfile(path) and os.path.getsize(path) > 64:
+            return path
+
+    task_row = upload_task_store.get_task(UPLOAD_TASKS_DB_PATH, session_id) or {}
+    original_url = str(task_row.get("original_file_url") or "").split("?", 1)[0]
+    if original_url.startswith("/files/"):
+        candidate = os.path.join(UPLOAD_DIR, os.path.basename(original_url))
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 64:
+            return candidate
+
+    subtitled_path = os.path.join(CACHE_DIR, f"{session_id}_subtitled.mp4")
+    if os.path.isfile(subtitled_path) and os.path.getsize(subtitled_path) > 64:
+        return subtitled_path
+    return None
+
+
+def _publish_cover_status(task_id: str, cached: dict | None = None) -> dict:
+    available = bilibili_uploader.list_available_cover_kinds(CACHE_DIR, task_id)
+    generated_ok = "generated" in available
+    frames_ok = {
+        kind: kind in available for kind in bilibili_uploader.COVER_FRAME_KINDS
+    }
+    preferred = None
+    if cached and isinstance(cached, dict):
+        preferred = cached.get("cover_selected")
+    else:
+        loaded = bilibili_uploader.load_publish_meta_cache(CACHE_DIR, task_id, None)
+        if loaded:
+            preferred = loaded.get("cover_selected")
+    selected = bilibili_uploader.resolve_selected_cover_kind(
+        preferred=preferred,
+        available=available,
+    )
+    selected_url = (
+        f"/media/{task_id}/publish_cover?kind={selected}" if selected in available else None
+    )
+    return {
+        "cover_url": selected_url,
+        "cover_available": bool(available),
+        "cover_generated_available": generated_ok,
+        "cover_frame_available": any(frames_ok.values()),
+        "cover_frames_available": frames_ok,
+        "cover_selected": selected if available else None,
+        "cover_generated_url": (
+            f"/media/{task_id}/publish_cover?kind=generated" if generated_ok else None
+        ),
+        "cover_frame_urls": {
+            kind: f"/media/{task_id}/publish_cover?kind={kind}"
+            for kind, ok in frames_ok.items()
+            if ok
+        },
+    }
+
+
 @app.get("/media/{session_id}/subtitled")
 async def serve_subtitled_media(
     session_id: str,
@@ -2372,16 +2429,8 @@ async def publish_task_bilibili_meta(
     except OSError:
         source_mtime = None
 
-    def _cover_payload():
-        cover_file = bilibili_uploader.publish_cover_path(CACHE_DIR, task_id)
-        if os.path.isfile(cover_file) and os.path.getsize(cover_file) > 64:
-            return {
-                "cover_url": f"/media/{task_id}/publish_cover",
-                "cover_available": True,
-            }
-        return {"cover_url": None, "cover_available": False}
-
     force_refresh = bool(refresh)
+    cached = None
     if not force_refresh:
         cached = await asyncio.to_thread(
             bilibili_uploader.load_publish_meta_cache,
@@ -2396,7 +2445,7 @@ async def publish_task_bilibili_meta(
                 "desc": cached.get("desc") or "",
                 "tags": cached.get("tags") or "",
                 "cached": True,
-                **_cover_payload(),
+                **_publish_cover_status(task_id, cached),
             }
 
     final_results_list = _load_final_results_list(task_id)
@@ -2445,7 +2494,7 @@ async def publish_task_bilibili_meta(
         "desc": desc,
         "tags": tags,
         "cached": False,
-        **_cover_payload(),
+        **_publish_cover_status(task_id),
     }
 
 
@@ -2453,6 +2502,7 @@ class BilibiliPublishMetaSaveRequest(BaseModel):
     title: str
     desc: str | None = None
     tags: str | None = None
+    cover_kind: str | None = None
     client_user_id: str | None = None
 
 
@@ -2491,6 +2541,7 @@ async def save_publish_task_bilibili_meta(
         desc=(req.desc or "").strip(),
         tags=(req.tags or "").strip(),
         source_mtime=source_mtime,
+        cover_selected=req.cover_kind,
     )
     return {
         "task_id": task_id,
@@ -2498,6 +2549,7 @@ async def save_publish_task_bilibili_meta(
         "desc": saved.get("desc") or "",
         "tags": saved.get("tags") or "",
         "cached": True,
+        **_publish_cover_status(task_id, saved),
     }
 
 
@@ -2506,6 +2558,7 @@ class BilibiliPublishCoverRequest(BaseModel):
     desc: str | None = None
     tags: str | None = None
     refresh: bool | None = False
+    source: str | None = None
     client_user_id: str | None = None
 
 
@@ -2516,7 +2569,7 @@ async def generate_publish_task_cover(
     request: Request,
     client_user_id: str | None = Query(None),
 ):
-    """根据摘要核心提炼画面 Prompt，再调用 Qwen-Image 生成投稿封面。"""
+    """生成投稿封面：source=generated 走文生图；source=frame 从原视频随机抽三帧。"""
     requester = _normalize_client_user_id(client_user_id) or _normalize_client_user_id(
         req.client_user_id
     )
@@ -2526,13 +2579,29 @@ async def generate_publish_task_cover(
     if not await task_manager.verify_access(task_id, requester):
         raise HTTPException(status_code=403, detail="无权访问该任务")
 
-    cover_file = bilibili_uploader.publish_cover_path(CACHE_DIR, task_id)
-    if not req.refresh and os.path.isfile(cover_file) and os.path.getsize(cover_file) > 64:
-        return {
-            "task_id": task_id,
-            "cover_url": f"/media/{task_id}/publish_cover",
-            "cached": True,
-        }
+    raw_source = str(req.source or "generated").strip().lower()
+    want_frames = raw_source in ("frame", "frames") or raw_source.startswith("frame_")
+    cover_kind = "frame" if want_frames else "generated"
+    if not req.refresh:
+        if cover_kind == "frame" and bilibili_uploader.frames_cover_available(CACHE_DIR, task_id):
+            status = _publish_cover_status(task_id)
+            return {
+                "task_id": task_id,
+                **status,
+                "cover_kind": "frame",
+                "cached": True,
+            }
+        if cover_kind == "generated":
+            cover_file = bilibili_uploader.publish_cover_path(CACHE_DIR, task_id, "generated")
+            if bilibili_uploader.cover_file_available(cover_file):
+                status = _publish_cover_status(task_id)
+                return {
+                    "task_id": task_id,
+                    **status,
+                    "cover_url": f"/media/{task_id}/publish_cover?kind=generated",
+                    "cover_kind": "generated",
+                    "cached": True,
+                }
 
     # 优先用请求体；否则回退到已缓存文案
     title = (req.title or "").strip()
@@ -2550,45 +2619,65 @@ async def generate_publish_task_cover(
             desc = desc or str(cached.get("desc") or "")
             tags = tags or str(cached.get("tags") or "")
 
-    if not (title or desc):
+    if cover_kind == "generated" and not (title or desc):
         raise HTTPException(status_code=400, detail="请先生成标题/简介，再生成封面")
 
     summary = ""
-    try:
-        summary = await asyncio.to_thread(rag.load_cached_summary, task_id)
-        if not summary:
-            final_results_list = _load_final_results_list(task_id)
-            if final_results_list:
-                built = await rag.get_or_build_summary(
-                    task_id, final_results_list, ui_language="zh-CN"
-                )
-                summary = str((built or {}).get("summary") or "").strip()
-    except Exception as e:
-        server_log.logger.warning(
-            f"[PublishCover] task={task_id} 摘要不可用，改用标题/简介: {e}"
-        )
+    if cover_kind == "generated":
+        try:
+            summary = await asyncio.to_thread(rag.load_cached_summary, task_id)
+            if not summary:
+                final_results_list = _load_final_results_list(task_id)
+                if final_results_list:
+                    built = await rag.get_or_build_summary(
+                        task_id, final_results_list, ui_language="zh-CN"
+                    )
+                    summary = str((built or {}).get("summary") or "").strip()
+        except Exception as e:
+            server_log.logger.warning(
+                f"[PublishCover] task={task_id} 摘要不可用，改用标题/简介: {e}"
+            )
 
     try:
-        result = await asyncio.to_thread(
-            bilibili_uploader.generate_publish_cover,
-            CACHE_DIR,
-            task_id,
-            title=title,
-            desc=desc,
-            tags=tags,
-            summary=summary,
-        )
+        if cover_kind == "frame":
+            video_path = resolve_original_video_path(task_id)
+            if not video_path:
+                raise HTTPException(status_code=404, detail="找不到原视频，无法抽帧封面")
+            result = await asyncio.to_thread(
+                bilibili_uploader.generate_publish_cover_from_frames,
+                CACHE_DIR,
+                task_id,
+                video_path,
+            )
+        else:
+            result = await asyncio.to_thread(
+                bilibili_uploader.generate_publish_cover,
+                CACHE_DIR,
+                task_id,
+                title=title,
+                desc=desc,
+                tags=tags,
+                summary=summary,
+            )
+    except HTTPException:
+        raise
     except bilibili_uploader.BiliUploadError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
-        server_log.logger.exception(f"[PublishCover] task={task_id} failed")
+        server_log.logger.exception(f"[PublishCover] task={task_id} kind={cover_kind} failed")
         raise HTTPException(status_code=503, detail=f"封面生成失败: {e}") from e
 
-    cover_prompt = str(result.get("prompt") or "").strip()
-    server_log.logger.info(
-        f"[PublishCover] task={task_id} summary_chars={len(summary)} "
-        f"prompt={cover_prompt[:400]}"
-    )
+    if cover_kind == "frame":
+        server_log.logger.info(
+            f"[PublishCover] task={task_id} kind=frame "
+            f"frames={[item.get('kind') for item in (result.get('frames') or [])]}"
+        )
+    else:
+        cover_prompt = str(result.get("prompt") or "").strip()
+        server_log.logger.info(
+            f"[PublishCover] task={task_id} kind=generated summary_chars={len(summary)} "
+            f"prompt={cover_prompt[:400]}"
+        )
 
     # 把封面路径写回 meta 缓存（保留原 title/desc/tags）
     result_path = os.path.join(SEGMENT_DIR, task_id, "final_result.json")
@@ -2606,9 +2695,12 @@ async def generate_publish_task_cover(
         source_mtime=source_mtime,
         cover_path=result.get("cover_path"),
     )
+    status = _publish_cover_status(task_id)
     return {
         "task_id": task_id,
-        "cover_url": result.get("cover_url") or f"/media/{task_id}/publish_cover",
+        **status,
+        "cover_url": result.get("cover_url") or f"/media/{task_id}/publish_cover?kind={cover_kind}",
+        "cover_kind": cover_kind,
         "cached": False,
     }
 
@@ -2618,20 +2710,37 @@ async def serve_publish_cover(
     session_id: str,
     client_user_id: str | None = Query(None),
     download: int | None = Query(None),
+    kind: str | None = Query(None),
 ):
-    """投稿封面图：鉴权后返回 PNG。"""
+    """投稿封面图：鉴权后返回 PNG/JPEG。kind=generated|frame_start|frame_middle|frame_end，缺省为当前选用。"""
     if not await task_manager.verify_access(session_id, client_user_id):
         raise HTTPException(status_code=403, detail="无权访问该媒体文件")
-    cover_path = bilibili_uploader.publish_cover_path(CACHE_DIR, session_id)
-    if not os.path.isfile(cover_path):
-        raise HTTPException(status_code=404, detail="封面尚未生成")
+    status = _publish_cover_status(session_id)
+    cover_kind = str(kind or "").strip().lower()
+    if cover_kind not in bilibili_uploader.COVER_KINDS:
+        cover_kind = status.get("cover_selected") or "generated"
+    cover_path = bilibili_uploader.publish_cover_path(CACHE_DIR, session_id, cover_kind)
+    if not bilibili_uploader.cover_file_available(cover_path):
+        fallback = None
+        for other in bilibili_uploader.COVER_KINDS:
+            other_path = bilibili_uploader.publish_cover_path(CACHE_DIR, session_id, other)
+            if bilibili_uploader.cover_file_available(other_path):
+                fallback = other_path
+                cover_kind = other
+                break
+        if not fallback:
+            raise HTTPException(status_code=404, detail="封面尚未生成")
+        cover_path = fallback
+    ext = os.path.splitext(cover_path)[1].lower()
+    media_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+    filename = f"{session_id}_cover{ext or '.png'}"
     headers = {
         "Cache-Control": "private, max-age=3600",
     }
     return FileResponse(
         cover_path,
-        media_type="image/png",
-        filename=f"{session_id}_cover.png",
+        media_type=media_type,
+        filename=filename,
         content_disposition_type="attachment" if download else "inline",
         headers=headers,
     )

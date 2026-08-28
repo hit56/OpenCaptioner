@@ -32,15 +32,25 @@ export function buildSubtitledDownloadUrl(taskId: string): string {
 }
 
 /** 投稿封面预览 / 下载 */
-export function buildPublishCoverUrl(taskId: string, version?: number): string {
+export function buildPublishCoverUrl(
+  taskId: string,
+  version?: number,
+  kind?: 'generated' | 'frame_start' | 'frame_middle' | 'frame_end',
+): string {
   const base = appendClientUserQuery(`/media/${encodeURIComponent(taskId)}/publish_cover`)
-  if (!version) return base
+  const params: string[] = []
+  if (kind) params.push(`kind=${encodeURIComponent(kind)}`)
+  if (version) params.push(`v=${version}`)
+  if (!params.length) return base
   const sep = base.includes('?') ? '&' : '?'
-  return `${base}${sep}v=${version}`
+  return `${base}${sep}${params.join('&')}`
 }
 
-export function buildPublishCoverDownloadUrl(taskId: string): string {
-  const base = buildPublishCoverUrl(taskId)
+export function buildPublishCoverDownloadUrl(
+  taskId: string,
+  kind?: 'generated' | 'frame_start' | 'frame_middle' | 'frame_end',
+): string {
+  const base = buildPublishCoverUrl(taskId, undefined, kind)
   const sep = base.includes('?') ? '&' : '?'
   return `${base}${sep}download=1`
 }

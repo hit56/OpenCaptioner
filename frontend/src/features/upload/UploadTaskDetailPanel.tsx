@@ -48,6 +48,18 @@ interface UploadTaskDetailPanelProps {
 }
 
 type PublishPlatform = 'bilibili' | 'xiaohongshu' | 'douyin' | 'youtube'
+type CoverKind = 'generated' | 'frame_start' | 'frame_middle' | 'frame_end'
+type FrameCoverKind = 'frame_start' | 'frame_middle' | 'frame_end'
+type CoverSource = 'generated' | 'frame'
+
+const COVER_KIND_LIST: CoverKind[] = ['generated', 'frame_start', 'frame_middle', 'frame_end']
+const FRAME_COVER_KINDS: FrameCoverKind[] = ['frame_start', 'frame_middle', 'frame_end']
+
+type CoverSlotState = {
+  url: string
+  loading: boolean
+  error: string
+}
 
 type PublishUiState =
   | { phase: 'idle' }
@@ -61,9 +73,8 @@ type PublishUiState =
       needTitle?: boolean
       openedHint?: boolean
       fromCache?: boolean
-      coverUrl?: string
-      coverLoading?: boolean
-      coverError?: string
+      covers: Record<CoverKind, CoverSlotState>
+      coverSelected: CoverKind
       coverVersion?: number
     }
   | { phase: 'error'; message: string }
@@ -90,6 +101,34 @@ const PUBLISH_PLATFORMS: Record<PublishPlatform, { url: string; labelKey: string
 function defaultPublishTitle(fileName: string): string {
   const base = fileName.replace(/\.[^/.]+$/, '').trim() || '字幕视频'
   return base.replace(/(_subtitle|_subtitled|_字幕)$/i, '').trim() || base
+}
+
+function coverSlotFromAvailable(
+  taskId: string,
+  kind: CoverKind,
+  available: boolean,
+  version: number,
+): CoverSlotState {
+  return {
+    url: available ? buildPublishCoverUrl(taskId, version, kind) : '',
+    loading: !available,
+    error: '',
+  }
+}
+
+function isFrameCover(kind: CoverKind): kind is FrameCoverKind {
+  return kind !== 'generated'
+}
+
+function framesBusy(covers: Record<CoverKind, CoverSlotState>): boolean {
+  return FRAME_COVER_KINDS.some((kind) => covers[kind].loading)
+}
+
+function coverLabelKey(kind: CoverKind): string {
+  if (kind === 'generated') return 'publishCoverGenerated'
+  if (kind === 'frame_start') return 'publishCoverFrameStart'
+  if (kind === 'frame_middle') return 'publishCoverFrameMiddle'
+  return 'publishCoverFrameEnd'
 }
 
 export function UploadTaskDetailPanel({
@@ -174,7 +213,12 @@ export function UploadTaskDetailPanel({
   }, [onSubtitlesSaved, taskId])
 
   const persistPublishMeta = useCallback(
-    async (payload: { title: string; desc: string; tags: string }) => {
+    async (payload: {
+      title: string
+      desc: string
+      tags: string
+      cover_kind?: CoverKind
+    }) => {
       if (!task) return
       const title = payload.title.trim()
       if (!title) return
@@ -183,6 +227,7 @@ export function UploadTaskDetailPanel({
           title,
           desc: payload.desc,
           tags: payload.tags,
+          cover_kind: payload.cover_kind,
         })
       } catch {
         // 保存失败不打断投稿流程，下次仍可再试
@@ -192,7 +237,12 @@ export function UploadTaskDetailPanel({
   )
 
   const schedulePersistPublishMeta = useCallback(
-    (payload: { title: string; desc: string; tags: string }) => {
+    (payload: {
+      title: string
+      desc: string
+      tags: string
+      cover_kind?: CoverKind
+    }) => {
       if (publishSaveTimerRef.current != null) {
         window.clearTimeout(publishSaveTimerRef.current)
       }
@@ -210,11 +260,81 @@ export function UploadTaskDetailPanel({
           title: prev.title,
           desc: prev.desc,
           tags: prev.tags,
+          cover_kind: prev.coverSelected,
         })
       }
       return { phase: 'idle' }
     })
   }, [persistPublishMeta])
+
+  const requestCover = useCallback(
+    async (
+      source: CoverSource,
+      payload: { title: string; desc: string; tags: string },
+      refresh: boolean,
+      seq: number,
+    ) => {
+      if (!task) return
+      try {
+        const result = await generateBilibiliPublishCover(task.taskId, {
+          ...payload,
+          refresh,
+          source,
+        })
+        if (seq !== metaRequestSeq.current) return
+        const version = Date.now()
+        setPublishState((prev) => {
+          if (prev.phase !== 'form') return prev
+          const covers = { ...prev.covers }
+          if (source === 'generated') {
+            covers.generated = {
+              url: buildPublishCoverUrl(task.taskId, version, 'generated'),
+              loading: false,
+              error: '',
+            }
+          } else {
+            for (const kind of FRAME_COVER_KINDS) {
+              const available = Boolean(result.cover_frames_available?.[kind] ?? true)
+              covers[kind] = {
+                url: available ? buildPublishCoverUrl(task.taskId, version, kind) : '',
+                loading: false,
+                error: available ? '' : t('publishCoverFrameFailed'),
+              }
+            }
+          }
+          const selectedSlot = covers[prev.coverSelected]
+          let coverSelected = prev.coverSelected
+          if (!selectedSlot.url && !selectedSlot.loading) {
+            coverSelected =
+              COVER_KIND_LIST.find((kind) => covers[kind].url) || prev.coverSelected
+          }
+          return { ...prev, covers, coverSelected, coverVersion: version }
+        })
+      } catch (coverErr) {
+        if (seq !== metaRequestSeq.current) return
+        const error =
+          coverErr instanceof Error
+            ? coverErr.message
+            : t(source === 'frame' ? 'publishCoverFrameFailed' : 'publishCoverFailed')
+        setPublishState((prev) => {
+          if (prev.phase !== 'form') return prev
+          const covers = { ...prev.covers }
+          const failedKinds: CoverKind[] = source === 'generated' ? ['generated'] : FRAME_COVER_KINDS
+          for (const kind of failedKinds) {
+            covers[kind] = { ...covers[kind], loading: false, error }
+          }
+          const selectedSlot = covers[prev.coverSelected]
+          let coverSelected = prev.coverSelected
+          if (!selectedSlot.url && !selectedSlot.loading) {
+            coverSelected =
+              COVER_KIND_LIST.find((kind) => covers[kind].url) || prev.coverSelected
+          }
+          return { ...prev, covers, coverSelected }
+        })
+      }
+    },
+    [t, task],
+  )
 
   const openPublishForm = useCallback(
     async (refresh = false) => {
@@ -227,53 +347,57 @@ export function UploadTaskDetailPanel({
         const title = meta.title || defaultPublishTitle(task.fileName)
         const desc = meta.desc || ''
         const tags = meta.tags || ''
-        const hasCover = Boolean(meta.cover_available)
+        const version = Date.now()
+        const hasGenerated = Boolean(meta.cover_generated_available)
+        const framesAvail = meta.cover_frames_available || {}
+        const hasAllFrames = FRAME_COVER_KINDS.every((kind) => framesAvail[kind])
+        const hasAnyFrame = FRAME_COVER_KINDS.some((kind) => framesAvail[kind])
+        const coverSelected: CoverKind =
+          meta.cover_selected &&
+          (meta.cover_selected === 'generated'
+            ? hasGenerated
+            : isFrameCover(meta.cover_selected) && Boolean(framesAvail[meta.cover_selected]))
+            ? meta.cover_selected
+            : hasGenerated
+              ? 'generated'
+              : hasAnyFrame
+                ? FRAME_COVER_KINDS.find((kind) => framesAvail[kind]) || 'generated'
+                : 'generated'
         setPublishState({
           phase: 'form',
           title,
           desc,
           tags,
           fromCache: Boolean(meta.cached) && !refresh,
-          coverUrl: hasCover ? buildPublishCoverUrl(task.taskId, Date.now()) : '',
-          coverLoading: !hasCover,
-          coverError: '',
-          coverVersion: hasCover ? Date.now() : 0,
+          covers: {
+            generated: coverSlotFromAvailable(task.taskId, 'generated', hasGenerated, version),
+            frame_start: coverSlotFromAvailable(
+              task.taskId,
+              'frame_start',
+              Boolean(framesAvail.frame_start),
+              version,
+            ),
+            frame_middle: coverSlotFromAvailable(
+              task.taskId,
+              'frame_middle',
+              Boolean(framesAvail.frame_middle),
+              version,
+            ),
+            frame_end: coverSlotFromAvailable(
+              task.taskId,
+              'frame_end',
+              Boolean(framesAvail.frame_end),
+              version,
+            ),
+          },
+          coverSelected,
+          coverVersion: version,
         })
-        if (!hasCover) {
-          try {
-            await generateBilibiliPublishCover(task.taskId, {
-              title,
-              desc,
-              tags,
-              refresh: false,
-            })
-            if (seq !== metaRequestSeq.current) return
-            const version = Date.now()
-            setPublishState((prev) =>
-              prev.phase === 'form'
-                ? {
-                    ...prev,
-                    coverUrl: buildPublishCoverUrl(task.taskId, version),
-                    coverLoading: false,
-                    coverError: '',
-                    coverVersion: version,
-                  }
-                : prev,
-            )
-          } catch (coverErr) {
-            if (seq !== metaRequestSeq.current) return
-            setPublishState((prev) =>
-              prev.phase === 'form'
-                ? {
-                    ...prev,
-                    coverLoading: false,
-                    coverError:
-                      coverErr instanceof Error ? coverErr.message : t('publishCoverFailed'),
-                  }
-                : prev,
-            )
-          }
-        }
+        const payload = { title, desc, tags }
+        const jobs: Promise<void>[] = []
+        if (!hasGenerated) jobs.push(requestCover('generated', payload, false, seq))
+        if (!hasAllFrames) jobs.push(requestCover('frame', payload, false, seq))
+        if (jobs.length) await Promise.all(jobs)
       } catch (err) {
         if (seq !== metaRequestSeq.current) return
         setPublishState({
@@ -282,7 +406,7 @@ export function UploadTaskDetailPanel({
         })
       }
     },
-    [task, t],
+    [requestCover, t, task],
   )
 
   const togglePublishPanel = useCallback(() => {
@@ -292,6 +416,7 @@ export function UploadTaskDetailPanel({
         title: publishState.title,
         desc: publishState.desc,
         tags: publishState.tags,
+        cover_kind: publishState.coverSelected,
       })
       setPublishState({ phase: 'idle' })
       return
@@ -306,40 +431,60 @@ export function UploadTaskDetailPanel({
   const regenerateCover = useCallback(async () => {
     if (!task || publishState.phase !== 'form') return
     const seq = metaRequestSeq.current
-    setPublishState({ ...publishState, coverLoading: true, coverError: '' })
-    try {
-      await generateBilibiliPublishCover(task.taskId, {
+    const payload = {
+      title: publishState.title,
+      desc: publishState.desc,
+      tags: publishState.tags,
+    }
+    setPublishState({
+      ...publishState,
+      covers: {
+        ...publishState.covers,
+        generated: { ...publishState.covers.generated, loading: true, error: '' },
+      },
+    })
+    await requestCover('generated', payload, true, seq)
+  }, [requestCover, publishState, task])
+
+  const reextractFrames = useCallback(async () => {
+    if (!task || publishState.phase !== 'form') return
+    const seq = metaRequestSeq.current
+    setPublishState({
+      ...publishState,
+      covers: {
+        ...publishState.covers,
+        frame_start: { ...publishState.covers.frame_start, loading: true, error: '' },
+        frame_middle: { ...publishState.covers.frame_middle, loading: true, error: '' },
+        frame_end: { ...publishState.covers.frame_end, loading: true, error: '' },
+      },
+    })
+    await requestCover(
+      'frame',
+      {
         title: publishState.title,
         desc: publishState.desc,
         tags: publishState.tags,
-        refresh: true,
+      },
+      true,
+      seq,
+    )
+  }, [requestCover, publishState, task])
+
+  const selectCover = useCallback(
+    (kind: CoverKind) => {
+      if (publishState.phase !== 'form') return
+      const slot = publishState.covers[kind]
+      if (!slot.url || slot.loading) return
+      setPublishState({ ...publishState, coverSelected: kind })
+      void persistPublishMeta({
+        title: publishState.title,
+        desc: publishState.desc,
+        tags: publishState.tags,
+        cover_kind: kind,
       })
-      if (seq !== metaRequestSeq.current) return
-      const version = Date.now()
-      setPublishState((prev) =>
-        prev.phase === 'form'
-          ? {
-              ...prev,
-              coverUrl: buildPublishCoverUrl(task.taskId, version),
-              coverLoading: false,
-              coverError: '',
-              coverVersion: version,
-            }
-          : prev,
-      )
-    } catch (err) {
-      if (seq !== metaRequestSeq.current) return
-      setPublishState((prev) =>
-        prev.phase === 'form'
-          ? {
-              ...prev,
-              coverLoading: false,
-              coverError: err instanceof Error ? err.message : t('publishCoverFailed'),
-            }
-          : prev,
-      )
-    }
-  }, [task, publishState, t])
+    },
+    [persistPublishMeta, publishState],
+  )
 
   const toggleConfirmMenu = useCallback(() => {
     setPublishState((prev) => {
@@ -366,6 +511,7 @@ export function UploadTaskDetailPanel({
         title,
         desc: publishState.desc,
         tags: publishState.tags,
+        cover_kind: publishState.coverSelected,
       })
       // 保持表单展开，方便用户回来复制标题/简介/标签
       setPublishState({
@@ -392,6 +538,7 @@ export function UploadTaskDetailPanel({
           title: next.title,
           desc: next.desc,
           tags: next.tags,
+          cover_kind: next.coverSelected,
         })
         return next
       })
@@ -679,11 +826,13 @@ export function UploadTaskDetailPanel({
                 <div className="bili-publish-field-label">
                   <span>{t('publishCoverLabel')}</span>
                   <div className="bili-publish-cover-actions">
-                    {publishState.coverUrl ? (
+                    {publishState.covers[publishState.coverSelected].url ? (
                       <a
                         className="bili-publish-copy-btn"
-                        href={buildPublishCoverDownloadUrl(task.taskId)}
-                        download={`${task.fileName.replace(/\.[^/.]+$/, '')}_cover.png`}
+                        href={buildPublishCoverDownloadUrl(task.taskId, publishState.coverSelected)}
+                        download={`${task.fileName.replace(/\.[^/.]+$/, '')}_cover.${
+                          isFrameCover(publishState.coverSelected) ? 'jpg' : 'png'
+                        }`}
                         target="_blank"
                         rel="noreferrer"
                       >
@@ -693,33 +842,68 @@ export function UploadTaskDetailPanel({
                     <button
                       type="button"
                       className="bili-publish-copy-btn"
-                      disabled={publishState.coverLoading}
+                      disabled={publishState.covers.generated.loading}
                       onClick={() => void regenerateCover()}
                     >
-                      {publishState.coverLoading
+                      {publishState.covers.generated.loading
                         ? t('publishCoverGenerating')
                         : t('publishCoverRegenerate')}
                     </button>
+                    <button
+                      type="button"
+                      className="bili-publish-copy-btn"
+                      disabled={framesBusy(publishState.covers)}
+                      onClick={() => void reextractFrames()}
+                    >
+                      {framesBusy(publishState.covers)
+                        ? t('publishCoverExtractingFrames')
+                        : t('publishCoverReextractFrames')}
+                    </button>
                   </div>
                 </div>
-                {publishState.coverLoading ? (
-                  <div className="bili-publish-cover-placeholder">
-                    {t('publishCoverGenerating')}
-                  </div>
-                ) : publishState.coverUrl ? (
-                  <img
-                    className="bili-publish-cover-img"
-                    src={publishState.coverUrl}
-                    alt={t('publishCoverLabel')}
-                  />
-                ) : (
-                  <div className="bili-publish-cover-placeholder error">
-                    {publishState.coverError || t('publishCoverEmpty')}
-                  </div>
-                )}
-                {publishState.coverError && publishState.coverUrl ? (
-                  <div className="bili-publish-cover-error">{publishState.coverError}</div>
-                ) : null}
+                <div className="bili-publish-cover-grid">
+                  {COVER_KIND_LIST.map((kind) => {
+                    const slot = publishState.covers[kind]
+                    const selected = publishState.coverSelected === kind
+                    const label = t(coverLabelKey(kind))
+                    const loadingText = isFrameCover(kind)
+                      ? t('publishCoverExtractingFrames')
+                      : t('publishCoverGenerating')
+                    return (
+                      <button
+                        key={kind}
+                        type="button"
+                        className={`bili-publish-cover-card${selected ? ' selected' : ''}`}
+                        disabled={!slot.url || slot.loading}
+                        aria-pressed={selected}
+                        onClick={() => selectCover(kind)}
+                      >
+                        <div className="bili-publish-cover-card-head">
+                          <span>{label}</span>
+                          {selected && slot.url ? (
+                            <span className="bili-publish-cover-badge">{t('publishCoverSelected')}</span>
+                          ) : null}
+                        </div>
+                        {slot.loading ? (
+                          <div className="bili-publish-cover-placeholder">{loadingText}</div>
+                        ) : slot.url ? (
+                          <img
+                            className="bili-publish-cover-img"
+                            src={slot.url}
+                            alt={label}
+                          />
+                        ) : (
+                          <div className="bili-publish-cover-placeholder error">
+                            {slot.error || t('publishCoverEmpty')}
+                          </div>
+                        )}
+                        {slot.error && slot.url ? (
+                          <div className="bili-publish-cover-error">{slot.error}</div>
+                        ) : null}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
               <div className="bili-publish-actions">
                 <div className="publish-confirm-wrap" ref={publishConfirmMenuRef}>

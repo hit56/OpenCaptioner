@@ -1554,8 +1554,10 @@ button.seg-icon-btn { appearance: none; }
     padding: 0;
 }
 
-.bili-publish-copy-btn:hover {
-    text-decoration: underline;
+.bili-publish-copy-btn:disabled {
+    color: #bbb;
+    text-decoration: none;
+    cursor: default;
 }
 
 .bili-publish-cover {
@@ -1571,13 +1573,82 @@ button.seg-icon-btn { appearance: none; }
 .bili-publish-cover-img {
     display: block;
     width: 100%;
-    max-width: 420px;
     aspect-ratio: 16 / 9;
     object-fit: cover;
     border-radius: 6px;
     border: 1px solid #f0c2d4;
     background: #111;
+}
+
+.bili-publish-cover-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
     margin-top: 6px;
+}
+
+.bili-publish-cover-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 0;
+    padding: 6px;
+    border: 1px solid #f0c2d4;
+    border-radius: 8px;
+    background: #fff;
+    text-align: left;
+    font-family: inherit;
+    color: inherit;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    min-width: 0;
+}
+
+.bili-publish-cover-card:disabled {
+    cursor: default;
+}
+
+.bili-publish-cover-card.selected {
+    border-color: var(--primary-color, #e53935);
+    box-shadow: 0 0 0 1px var(--primary-color, #e53935);
+}
+
+.bili-publish-cover-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    font-size: 11px;
+    color: #555;
+}
+
+.bili-publish-cover-badge {
+    font-size: 11px;
+    color: var(--primary-color, #e53935);
+    white-space: nowrap;
+}
+
+.bili-publish-cover-badge.muted {
+    color: #999;
+}
+
+.bili-publish-cover-card .bili-publish-cover-placeholder,
+.bili-publish-cover-card .bili-publish-cover-img {
+    max-width: none;
+    margin-top: 0;
+}
+
+.bili-publish-cover-card .bili-publish-cover-placeholder {
+    min-height: 72px;
+    font-size: 11px;
+    padding: 8px;
+}
+
+@media (max-width: 720px) {
+    .bili-publish-cover-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 .bili-publish-cover-placeholder {
