@@ -326,6 +326,65 @@ canvas:not(#dh-canvas) { display: block; width: 100%; height: 100%; background-c
 }
 .asr-lang-select:focus { border-color: var(--primary-color, #e53935); }
 .asr-lang-select:disabled { background: #f5f5f5; color: #aaa; cursor: not-allowed; }
+.upload-confirm-row {
+    flex: 1 1 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px 12px;
+}
+.asr-lang-options {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+}
+.asr-lang-options-label {
+    color: #666;
+    font-size: 12px;
+    white-space: nowrap;
+    margin-right: 2px;
+}
+.asr-lang-option {
+    padding: 5px 10px;
+    border: 1px solid #ddd;
+    border-radius: 16px;
+    background: #fff;
+    color: #555;
+    font-size: 12px;
+    line-height: 1.2;
+    cursor: pointer;
+    transition: 0.15s;
+}
+.asr-lang-option:hover:not(:disabled) {
+    border-color: #EF9A9A;
+    color: var(--primary-color);
+    background: #fff5f5;
+}
+.asr-lang-option.selected {
+    background: var(--primary-color);
+    border-color: var(--primary-color);
+    color: #fff;
+}
+.asr-lang-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+.upload-start-btn {
+    flex-shrink: 0;
+    padding: 7px 16px;
+    background: var(--primary-color);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: 0.2s;
+}
+.upload-start-btn:hover:not(:disabled) { background: var(--primary-hover); }
+.upload-start-btn:disabled { background: #f3c0c0; cursor: not-allowed; }
 .upload-multi-hint {
     flex: 1 1 100%;
     margin: 0;
@@ -2527,6 +2586,16 @@ button.seg-icon-btn { appearance: none; }
     .upload-area-main {
         flex-direction: column;
         gap: 8px;
+    }
+
+    .upload-confirm-row {
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .upload-start-btn {
+        width: 100%;
+        max-width: 280px;
     }
 
     #file-name-display {

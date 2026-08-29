@@ -143,6 +143,7 @@ export function UploadTab() {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
   const [fileNames, setFileNames] = useState('')
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
   const [dragOver, setDragOver] = useState(false)
   const [biliUrl, setBiliUrl] = useState('')
   const [biliSubmitting, setBiliSubmitting] = useState(false)
@@ -980,6 +981,36 @@ export function UploadTab() {
     }
   }
 
+  function stageFiles(files: File[]) {
+    if (!files.length || uploadLocked) return
+    let accepted = files
+    if (files.length > MAX_UPLOAD_FILES) {
+      accepted = files.slice(0, MAX_UPLOAD_FILES)
+      setUploadLimitNotice(t('uploadMaxFiles').replaceAll('{0}', String(MAX_UPLOAD_FILES)))
+    } else {
+      setUploadLimitNotice(null)
+    }
+    setPendingFiles(accepted)
+  }
+
+  function startPendingUpload() {
+    if (!pendingFiles.length || uploadLocked) return
+    logUserClick('upload_start_processing', {
+      label: t('uploadStartProcess'),
+      tab: 'upload',
+      fileName: pendingFiles.map((file) => file.name).join(', '),
+      meta: { count: pendingFiles.length, asrLanguage: asrLang },
+    })
+    enqueueFiles(pendingFiles)
+    setPendingFiles([])
+  }
+
+  function onAsrLangChange(next: AsrLanguageCode) {
+    asrLangRef.current = next
+    setAsrLang(next)
+    saveAsrLanguage(next)
+  }
+
   function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(event.target.files || [])
     if (files.length) {
@@ -990,9 +1021,35 @@ export function UploadTab() {
         meta: { count: files.length },
       })
     }
-    enqueueFiles(files)
+    stageFiles(files)
     event.target.value = ''
   }
+
+  const pendingFileNames = pendingFiles.map((file) => file.name).join(', ')
+  const displayFileNames = pendingFileNames || fileNames || t('noFileSelected')
+  const showFileConfirmRow = pendingFiles.length > 0
+
+  const asrLangOptions = (
+    <div className="asr-lang-options" role="group" aria-label={t('asrLangLabel')}>
+      <span className="asr-lang-options-label">{t('asrLangLabel')}</span>
+      {ASR_LANGUAGE_OPTIONS.map((option) => (
+        <button
+          type="button"
+          key={option.value}
+          className={`asr-lang-option${asrLang === option.value ? ' selected' : ''}`}
+          aria-pressed={asrLang === option.value}
+          disabled={uploadLocked}
+          title={t('asrLangHint')}
+          data-click-action="select_asr_language"
+          data-click-label={t(option.labelKey)}
+          data-click-tab="upload"
+          onClick={() => onAsrLangChange(option.value)}
+        >
+          {t(option.labelKey)}
+        </button>
+      ))}
+    </div>
+  )
 
   return (
     <>
@@ -1008,7 +1065,16 @@ export function UploadTab() {
           e.preventDefault()
           setDragOver(false)
           if (uploadLocked) return
-          enqueueFiles(Array.from(e.dataTransfer.files || []))
+          const files = Array.from(e.dataTransfer.files || [])
+          if (files.length) {
+            logUserClick('upload_files_dropped', {
+              label: '拖放音视频文件',
+              tab: 'upload',
+              fileName: files.map((file) => file.name).join(', '),
+              meta: { count: files.length },
+            })
+          }
+          stageFiles(files)
         }}
       >
         <input
@@ -1030,32 +1096,23 @@ export function UploadTab() {
           >
             {t('uploadHint')}
           </label>
-          <span id="file-name-display">{fileNames || t('noFileSelected')}</span>
-          <label className="asr-lang-picker" htmlFor="asr-lang-select">
-            <span className="asr-lang-picker-label">{t('asrLangLabel')}</span>
-            <select
-              id="asr-lang-select"
-              className="asr-lang-select"
-              value={asrLang}
+          <span id="file-name-display">{displayFileNames}</span>
+        </div>
+        <div className="upload-confirm-row">
+          {asrLangOptions}
+          {showFileConfirmRow ? (
+            <button
+              type="button"
+              className="upload-start-btn"
               disabled={uploadLocked}
-              title={t('asrLangHint')}
-              data-click-action="select_asr_language"
-              data-click-label={t('asrLangLabel')}
+              data-click-action="upload_start_processing"
+              data-click-label={t('uploadStartProcess')}
               data-click-tab="upload"
-              onChange={(e) => {
-                const next = e.target.value as AsrLanguageCode
-                asrLangRef.current = next
-                setAsrLang(next)
-                saveAsrLanguage(next)
-              }}
+              onClick={startPendingUpload}
             >
-              {ASR_LANGUAGE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {t(option.labelKey)}
-                </option>
-              ))}
-            </select>
-          </label>
+              {t('uploadStartProcess')}
+            </button>
+          ) : null}
         </div>
         <p
           className="upload-multi-hint"

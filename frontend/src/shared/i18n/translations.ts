@@ -7,8 +7,9 @@ export const translations: Record<LangCode, TranslationDict> = {
     appTitle: '智能语音转写',
     tabUpload: '文件上传',
     uploadHint: '选择音频/视频文件 (支持视频自动加字幕)',
+    uploadStartProcess: '上传开始处理',
     uploadMultiHint:
-      '最多同时上传 {0} 个音视频文件，选中后立即出现在左侧；点击任务查看各自进度，服务端按排队顺序处理',
+      '最多同时选择 {0} 个音视频文件，选好语种后再点击上传开始处理；提交后出现在左侧，服务端按排队顺序处理',
     uploadMaxFiles: '最多同时上传 {0} 个文件，已自动保留前 {0} 个',
     uploadBackgroundNotice:
       '文件已成功提交，系统将在后台继续处理。您可以暂时离开，但请勿关闭当前浏览器窗口，待处理完成后再次访问本页面查看结果。',
@@ -91,7 +92,8 @@ export const translations: Record<LangCode, TranslationDict> = {
     emptyGuideTitle: '识别结果将在这里展示',
     emptyGuideDesc: '上传音视频或粘贴视频链接后，转写结果、字幕与内容摘要都会出现在此区域。',
     emptyGuideHowTitle: '快速上手',
-    emptyGuideHow1: '在上方选择本地音视频文件，或粘贴哔哩哔哩 / 抖音 / YouTube 链接并解析。',
+    emptyGuideHow1:
+      '在上方选择本地音视频文件，指定语种后点击上传开始处理；或粘贴哔哩哔哩 / 抖音 / YouTube 链接并解析。',
     emptyGuideHow2: '提交后可在左侧「历史任务」查看进度；处理完成后点击任务即可查看详情。',
     emptyGuideHow3: '完成后可搜索关键词、按说话人筛选、复制文本；视频还可导出字幕与字幕视频。',
     emptyGuideTipsTitle: '注意事项',
@@ -268,8 +270,9 @@ export const translations: Record<LangCode, TranslationDict> = {
     appTitle: 'Speech Transcription',
     tabUpload: 'File Upload',
     uploadHint: 'Select audio/video files',
+    uploadStartProcess: 'Upload and start',
     uploadMultiHint:
-      'Upload up to {0} audio/video files at a time; they appear in the task list immediately. Click a task to view progress; the server processes them in queue order.',
+      'Select up to {0} audio/video files, choose a language, then click Upload and start. Submitted tasks appear on the left; the server processes them in queue order.',
     uploadMaxFiles: 'You can upload at most {0} files at a time; only the first {0} were kept.',
     uploadBackgroundNotice:
       'Your file has been submitted successfully, and the system will continue processing in the background. You may step away for now, but please do not close this browser window. Return to this page later to view the results.',
@@ -354,7 +357,7 @@ export const translations: Record<LangCode, TranslationDict> = {
       'After you upload audio/video or paste a video link, transcripts, subtitles, and summaries show up in this area.',
     emptyGuideHowTitle: 'Getting started',
     emptyGuideHow1:
-      'Choose a local audio/video file above, or paste a Bilibili / Douyin / YouTube link and fetch it.',
+      'Choose a local audio/video file above, pick a language, then click Upload and start; or paste a Bilibili / Douyin / YouTube link and fetch it.',
     emptyGuideHow2:
       'Track progress in History on the left; open a finished task to view details.',
     emptyGuideHow3:
