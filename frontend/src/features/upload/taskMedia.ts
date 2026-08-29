@@ -73,6 +73,25 @@ export function buildSubtitlePreviewVttUrl(taskId: string, version?: number): st
   return `/task/${encodeURIComponent(taskId)}/subtitles/preview.vtt?${params.toString()}`
 }
 
+/** 持久化用：不带 client_user_id 的原视频路径 */
+export function canonicalOriginalVideoPath(taskId: string): string {
+  return `/media/${encodeURIComponent(taskId)}/original`
+}
+
+/** 原视频播放 / 下载：走 FileResponse 端点，支持 Range 断点续传 */
+export function buildOriginalMediaUrl(taskId: string): string {
+  if (!isGatewayTaskId(taskId)) return ''
+  return appendClientUserQuery(canonicalOriginalVideoPath(taskId))
+}
+
+/** 原视频下载：附带 download_original=1，供网关记录下载行为 */
+export function buildOriginalDownloadUrl(taskId: string): string {
+  const base = buildOriginalMediaUrl(taskId)
+  if (!base) return ''
+  const sep = base.includes('?') ? '&' : '?'
+  return `${base}${sep}download_original=1`
+}
+
 /** 任务媒体（处理期间原片）：FileResponse + Range，避免 StaticFiles 断流 */
 export function buildTaskMediaUrl(taskId: string): string {
   if (!isGatewayTaskId(taskId)) return ''
@@ -196,6 +215,14 @@ export function resolveSubtitledDownloadUrl(task: {
 }): string {
   if (!hasSubtitledVideo(task)) return ''
   return buildSubtitledDownloadUrl(task.taskId)
+}
+
+export function resolveOriginalDownloadUrl(task: {
+  taskId: string
+  fileName: string
+}): string {
+  if (!isVideoFileName(task.fileName) || !isGatewayTaskId(task.taskId)) return ''
+  return buildOriginalDownloadUrl(task.taskId)
 }
 
 const TASK_ID_TIME_LEGACY_RE = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})_/

@@ -11,6 +11,7 @@ import {
   buildPublishCoverDownloadUrl,
   buildPublishCoverUrl,
   buildSubtitledExportUrl,
+  resolveOriginalDownloadUrl,
   resolveSubtitledDownloadUrl,
   resolveTaskDisplayMessage,
   resolveTaskHistoryStatus,
@@ -674,6 +675,7 @@ export function UploadTaskDetailPanel({
     segmentMatchesFilters(segment, keyword, speakerFilter),
   )
   const blockVisible = !hasActiveFilters || visibleSegments.length > 0
+  const originalDownloadUrl = resolveOriginalDownloadUrl(task)
   const subtitledDownloadUrl = resolveSubtitledDownloadUrl(task)
   const hasSegments = task.segments.length > 0 || Boolean(task.fullText?.trim())
   const subtitleExportUrl = hasSegments ? buildSubtitledExportUrl(task.taskId, lang) : ''
@@ -700,6 +702,22 @@ export function UploadTaskDetailPanel({
         <span className={`status-indicator${displayStatus === 'done' ? ' done' : ''}`}>
           {displayMessage}
         </span>
+        {originalDownloadUrl ? (
+          <a
+            className="header-download-btn download-original-btn"
+            href={originalDownloadUrl}
+            download={task.fileName}
+            target="_blank"
+            rel="noreferrer"
+            data-click-action="download_original_video"
+            data-click-label={t('downloadOriginalVideo')}
+            data-click-tab="upload"
+            data-task-id={task.taskId}
+            data-file-name={task.fileName}
+          >
+            {t('downloadOriginalVideo')}
+          </a>
+        ) : null}
         {subtitledDownloadUrl ? (
           <a
             className="header-download-btn"
@@ -1033,6 +1051,7 @@ export function UploadTaskDetailPanel({
             activeSpeakerId={speakerFilter}
             detectedLang={task.detectedLang}
             detectedLangName={task.detectedLangName}
+            langForced={task.langForced}
             onToggleSpeaker={onToggleSpeaker}
             onDeleteSpeaker={onDeleteSpeaker}
           />

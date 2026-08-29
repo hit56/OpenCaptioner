@@ -10,6 +10,14 @@ async function parseJsonSafe<T>(response: Response): Promise<T> {
   }
 }
 
+function appendUploadFormMeta(formData: FormData, language: string, asrLanguage: string, startMs: number) {
+  // Metadata first: some proxies drop trailing multipart fields after a large file part.
+  formData.append('client_start_ms', String(startMs))
+  formData.append('ui_language', language)
+  formData.append('asr_language', asrLanguage)
+  formData.append('client_user_id', getOrCreateClientUserId())
+}
+
 function parseUploadErrorDetail(responseText: string, fallback: string): string {
   try {
     const parsed = JSON.parse(responseText) as { detail?: unknown }
@@ -25,12 +33,10 @@ function parseUploadErrorDetail(responseText: string, fallback: string): string 
   return fallback
 }
 
-export async function uploadFile(file: File, language: string): Promise<UploadTaskQueuedResponse> {
+export async function uploadFile(file: File, language: string, asrLanguage = 'auto'): Promise<UploadTaskQueuedResponse> {
   const formData = new FormData()
+  appendUploadFormMeta(formData, language, asrLanguage, Date.now())
   formData.append('file', file)
-  formData.append('client_start_ms', String(Date.now()))
-  formData.append('ui_language', language)
-  formData.append('client_user_id', getOrCreateClientUserId())
   const response = await fetch('/upload', {
     method: 'POST',
     headers: authHeaders(),
@@ -50,6 +56,7 @@ export async function uploadFile(file: File, language: string): Promise<UploadTa
 export async function uploadBilibiliUrl(
   url: string,
   language: string,
+  asrLanguage = 'auto',
 ): Promise<UploadTaskQueuedResponse & { file_name?: string }> {
   const response = await fetch('/upload_bilibili', {
     method: 'POST',
@@ -57,6 +64,7 @@ export async function uploadBilibiliUrl(
     body: JSON.stringify({
       url,
       ui_language: language,
+      asr_language: asrLanguage,
       client_user_id: getOrCreateClientUserId(),
       client_start_ms: String(Date.now()),
     }),
@@ -75,6 +83,7 @@ export async function uploadBilibiliUrl(
 export async function uploadVideoUrl(
   url: string,
   language: string,
+  asrLanguage = 'auto',
 ): Promise<UploadTaskQueuedResponse & { file_name?: string }> {
   const response = await fetch('/upload_video', {
     method: 'POST',
@@ -82,6 +91,7 @@ export async function uploadVideoUrl(
     body: JSON.stringify({
       url,
       ui_language: language,
+      asr_language: asrLanguage,
       client_user_id: getOrCreateClientUserId(),
       client_start_ms: String(Date.now()),
     }),
@@ -107,15 +117,14 @@ export function uploadFileWithProgress(
   file: File,
   language: string,
   onProgress: (info: UploadProgressInfo) => void,
+  asrLanguage = 'auto',
 ): Promise<UploadTaskQueuedResponse> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     const formData = new FormData()
-    formData.append('file', file)
     const startMs = Date.now()
-    formData.append('client_start_ms', String(startMs))
-    formData.append('ui_language', language)
-    formData.append('client_user_id', getOrCreateClientUserId())
+    appendUploadFormMeta(formData, language, asrLanguage, startMs)
+    formData.append('file', file)
     xhr.open('POST', '/upload', true)
     const token = getAccessToken()
     if (token) {

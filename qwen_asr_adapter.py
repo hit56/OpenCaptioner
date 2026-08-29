@@ -195,13 +195,21 @@ def infer_language_from_text(text):
         return "nospeech"
 
     thai_count = len(re.findall(r"[\u0e00-\u0e7f]", normalized))
-    cjk_count = len(re.findall(r'[\u4e00-\u9fff]', normalized))
-    latin_count = len(re.findall(r'[A-Za-z]', normalized))
-    if thai_count > 0 and thai_count >= max(cjk_count, latin_count, 1):
+    kana_count = len(re.findall(r"[\u3040-\u309f\u30a0-\u30ff]", normalized))
+    hangul_count = len(re.findall(r"[\uac00-\ud7af]", normalized))
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", normalized))
+    latin_count = len(re.findall(r"[A-Za-z]", normalized))
+
+    # Kana / Hangul are decisive even when singing ASR mixed in a translation.
+    if kana_count >= 3 and kana_count >= max(hangul_count, thai_count, 1):
+        return "ja"
+    if hangul_count >= 3 and hangul_count >= max(kana_count, thai_count, 1):
+        return "ko"
+    if thai_count > 0 and thai_count >= max(cjk_count, latin_count, kana_count, hangul_count, 1):
         return "th"
-    if latin_count == 0 and cjk_count == 0:
+    if latin_count == 0 and cjk_count == 0 and kana_count == 0 and hangul_count == 0:
         return "unknown"
-    if latin_count > 0 and cjk_count == 0:
+    if latin_count > 0 and cjk_count == 0 and kana_count == 0 and hangul_count == 0:
         return "en"
     if cjk_count > 0 and latin_count == 0:
         return "zh"

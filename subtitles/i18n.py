@@ -76,13 +76,21 @@ def infer_language_from_text(text):
         return "nospeech"
 
     thai_count = len(re.findall(r"[\u0e00-\u0e7f]", normalized))
+    kana_count = len(re.findall(r"[\u3040-\u309f\u30a0-\u30ff]", normalized))
+    hangul_count = len(re.findall(r"[\uac00-\ud7af]", normalized))
     cjk_count = len(re.findall(r"[\u4e00-\u9fff]", normalized))
     latin_count = len(re.findall(r"[A-Za-z]", normalized))
-    if thai_count > 0 and thai_count >= max(cjk_count, latin_count, 1):
+
+    # Kana / Hangul are decisive even when singing ASR mixed in a translation.
+    if kana_count >= 3 and kana_count >= max(hangul_count, thai_count, 1):
+        return "ja"
+    if hangul_count >= 3 and hangul_count >= max(kana_count, thai_count, 1):
+        return "ko"
+    if thai_count > 0 and thai_count >= max(cjk_count, latin_count, kana_count, hangul_count, 1):
         return "th"
-    if latin_count == 0 and cjk_count == 0:
+    if latin_count == 0 and cjk_count == 0 and kana_count == 0 and hangul_count == 0:
         return "unknown"
-    if latin_count > 0 and cjk_count == 0:
+    if latin_count > 0 and cjk_count == 0 and kana_count == 0 and hangul_count == 0:
         return "en"
     if cjk_count > 0 and latin_count == 0:
         return "zh"
@@ -91,6 +99,89 @@ def infer_language_from_text(text):
     if cjk_count > latin_count:
         return "zh"
     return "unknown"
+
+
+# 用户指定的内容语种（ASR 锁定）。None = 自动检测。
+ASR_LANGUAGE_ALIASES = {
+    "auto": None,
+    "detect": None,
+    "none": None,
+    "unknown": None,
+    "zh": "zh",
+    "zh-cn": "zh",
+    "zh-hans": "zh",
+    "chinese": "zh",
+    "mandarin": "zh",
+    "yue": "yue",
+    "cantonese": "yue",
+    "zh-hk": "yue",
+    "en": "en",
+    "english": "en",
+    "ja": "ja",
+    "jp": "ja",
+    "ja-jp": "ja",
+    "japanese": "ja",
+    "ko": "ko",
+    "kr": "ko",
+    "ko-kr": "ko",
+    "korean": "ko",
+    "th": "th",
+    "th-th": "th",
+    "thai": "th",
+    "vi": "vi",
+    "vietnamese": "vi",
+    "id": "id",
+    "indonesian": "id",
+    "es": "es",
+    "spanish": "es",
+    "fr": "fr",
+    "french": "fr",
+    "de": "de",
+    "german": "de",
+    "ru": "ru",
+    "russian": "ru",
+    "pt": "pt",
+    "portuguese": "pt",
+    "ar": "ar",
+    "arabic": "ar",
+    "it": "it",
+    "italian": "it",
+}
+
+ASR_LANGUAGE_CODES = {
+    "zh", "yue", "en", "ja", "ko", "th", "vi", "id", "es", "fr", "de",
+    "ru", "pt", "ar", "it", "tr", "hi", "ms", "nl", "sv", "da", "fi",
+    "pl", "cs", "fil", "fa", "el", "ro", "hu", "mk",
+}
+
+
+def normalize_asr_language(raw_language):
+    """Map user/API asr_language to an ASR code, or None for auto-detect."""
+    raw = str(raw_language or "").strip()
+    if not raw:
+        return None
+    lowered = raw.replace("_", "-").lower()
+    if lowered in ASR_LANGUAGE_ALIASES:
+        return ASR_LANGUAGE_ALIASES[lowered]
+    if lowered in ASR_LANGUAGE_CODES:
+        return lowered
+    return None
+
+
+ASR_LANGUAGE_DISPLAY_ZH = {
+    "zh": "普通话",
+    "yue": "粤语",
+    "en": "英语",
+    "ja": "日语",
+    "ko": "韩语",
+    "th": "泰语",
+    "vi": "越南语",
+}
+
+
+def asr_language_display_name_zh(language_code):
+    code = (language_code or "").strip().lower()
+    return ASR_LANGUAGE_DISPLAY_ZH.get(code, language_code or "")
 
 
 def should_translate_for_ui_language(language_code, ui_language="zh-CN", text=""):

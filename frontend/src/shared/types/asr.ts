@@ -55,6 +55,8 @@ export interface UploadTaskResult {
   speakerStats?: TaskSpeakerStat[]
   detectedLang?: string
   detectedLangName?: string
+  /** True when the user locked recognition language (skip auto-detect). */
+  langForced?: boolean
   /** 客户端上传阶段进度 0–100 */
   uploadPercent?: number
   /** 服务端离线队列位次（1 起），0 表示正在处理 */

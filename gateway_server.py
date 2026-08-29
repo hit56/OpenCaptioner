@@ -728,12 +728,14 @@ def _save_final_results_list(session_id: str, final_results_list: list):
 _offline_session_context: dict[str, dict] = {}
 
 
-def _init_offline_session_context(session_id: str, ui_language: str):
-    from subtitles.i18n import normalize_ui_language
+def _init_offline_session_context(session_id: str, ui_language: str, asr_language=None):
+    from subtitles.i18n import normalize_asr_language, normalize_ui_language
 
+    forced_lang = normalize_asr_language(asr_language)
     _offline_session_context[session_id] = {
         "ui_language": normalize_ui_language(ui_language),
-        "session_lang": "unknown",
+        "session_lang": forced_lang or "unknown",
+        "lang_forced": bool(forced_lang),
         "translations": {},
     }
 
@@ -891,12 +893,22 @@ async def dispatch_worker_event(session_id: str, event_type: str, data: dict) ->
 
     if event_type == "speaker_stats":
         detected_lang = data.get("detected_lang")
-        if detected_lang:
-            _offline_session_context.setdefault(session_id, {
-                "ui_language": "zh-CN",
-                "session_lang": "unknown",
-                "translations": {},
-            })["session_lang"] = str(detected_lang)
+        ctx = _offline_session_context.setdefault(session_id, {
+            "ui_language": "zh-CN",
+            "session_lang": "unknown",
+            "lang_forced": False,
+            "translations": {},
+        })
+        if ctx.get("lang_forced"):
+            from subtitles.i18n import asr_language_display_name_zh
+            locked = str(ctx.get("session_lang") or detected_lang or "")
+            data = dict(data)
+            data["detected_lang"] = locked
+            data["detected_lang_name"] = asr_language_display_name_zh(locked) or data.get("detected_lang_name")
+            data["lang_forced"] = True
+            detected_lang = locked
+        elif detected_lang:
+            ctx["session_lang"] = str(detected_lang)
         speakers = data.get("speakers")
         _update_upload_task_row(
             session_id,
@@ -932,7 +944,9 @@ async def dispatch_worker_event(session_id: str, event_type: str, data: dict) ->
         ui_language = data.get("ui_language", "zh-CN")
         ctx = _offline_session_context.get(session_id)
         if ctx:
-            if data.get("session_lang"):
+            if ctx.get("lang_forced") and ctx.get("session_lang"):
+                session_lang = ctx["session_lang"]
+            elif data.get("session_lang"):
                 ctx["session_lang"] = data.get("session_lang")
             if data.get("ui_language"):
                 from subtitles.i18n import normalize_ui_language
@@ -1023,6 +1037,7 @@ def build_worker_process_payload(
     request_start_time: float | None,
     ui_language: str,
     client_user_id: str | None = None,
+    asr_language: str | None = None,
 ) -> dict:
     payload = {
         "session_id": session_id,
@@ -1031,6 +1046,7 @@ def build_worker_process_payload(
         "fast_mode": fast_mode,
         "request_start_time": request_start_time,
         "ui_language": ui_language,
+        "asr_language": asr_language,
     }
     if GATEWAY_CALLBACK_URL:
         payload["callback_url"] = GATEWAY_CALLBACK_URL
@@ -1078,7 +1094,9 @@ async def _run_and_finalize_subtitles(session_id: str, data: dict):
     try:
         ctx = _offline_session_context.get(session_id)
         if ctx:
-            if data.get("session_lang"):
+            if ctx.get("lang_forced") and ctx.get("session_lang"):
+                data["session_lang"] = ctx["session_lang"]
+            elif data.get("session_lang"):
                 ctx["session_lang"] = data.get("session_lang")
             if data.get("ui_language"):
                 from subtitles.i18n import normalize_ui_language
@@ -1541,6 +1559,7 @@ async def dispatch_offline_worker(
     request_start_time: float | None,
     ui_language: str,
     client_user_id: str | None,
+    asr_language: str | None = None,
 ):
     """把已落盘的媒体交给离线 Worker 做 ASR，并开始拉取事件。
 
@@ -1557,6 +1576,11 @@ async def dispatch_offline_worker(
                 request_start_time,
                 ui_language or "zh-CN",
                 client_user_id=client_user_id,
+                asr_language=asr_language,
+            )
+            server_log.logger.info(
+                f"[{session_id}] Dispatch worker asr_language={asr_language or 'auto'} "
+                f"file={original_filename}"
             )
             async with session.post(f"{worker_url}/process_offline", json=payload) as resp:
                 resp.raise_for_status()  # 确保 HTTP 状态码为 200
@@ -1581,6 +1605,7 @@ async def upload_audio(
     file: UploadFile = File(...),
     client_start_ms: str | None = Form(None),
     ui_language: str | None = Form(None),
+    asr_language: str | None = Form(None),
     client_user_id: str | None = Form(None),
 ):
     _, owner_user_id = await resolve_request_auth(request)
@@ -1591,6 +1616,9 @@ async def upload_audio(
             f"[Upload] client_user_id mismatch form={form_user} auth={owner_user_id}, using auth"
         )
     client_user_id = owner_user_id
+
+    from subtitles.i18n import normalize_asr_language
+    forced_asr_lang = normalize_asr_language(asr_language)
 
     request_start_time = time.time()
     if client_start_ms:
@@ -1663,7 +1691,7 @@ async def upload_audio(
         file_url=file_url,
         original_file_url=original_file_url,
     )
-    _init_offline_session_context(session_id, ui_language or "zh-CN")
+    _init_offline_session_context(session_id, ui_language or "zh-CN", asr_language=forced_asr_lang)
     
     # 【优化 3】：带异常通知的异步 Worker 触发器
     # 丢入后台任务池执行，不阻塞当前接口返回
@@ -1675,6 +1703,7 @@ async def upload_audio(
             request_start_time,
             ui_language or "zh-CN",
             client_user_id,
+            asr_language=forced_asr_lang,
         )
     )
 
@@ -1690,6 +1719,7 @@ async def upload_audio(
 class BilibiliUploadRequest(BaseModel):
     url: str
     ui_language: str | None = None
+    asr_language: str | None = None
     client_user_id: str | None = None
     client_start_ms: str | None = None
 
@@ -1698,6 +1728,7 @@ class VideoUploadRequest(BaseModel):
     """通用视频链接提交：自动识别 B 站 / 抖音 / YouTube 等平台并路由到对应下载器。"""
     url: str
     ui_language: str | None = None
+    asr_language: str | None = None
     client_user_id: str | None = None
     client_start_ms: str | None = None
 
@@ -1856,6 +1887,7 @@ async def _run_url_download_and_process(
     download_fn,
     download_start_msg: str,
     download_fail_msg: str,
+    asr_language: str | None = None,
 ):
     """后台任务：下载视频 -> 抽音频 -> 派发 Worker，全程通过 SSE 上报进度。
 
@@ -1946,6 +1978,7 @@ async def _run_url_download_and_process(
         request_start_time,
         ui_language or "zh-CN",
         client_user_id,
+        asr_language=asr_language,
     )
 
 
@@ -2003,6 +2036,7 @@ async def _run_bilibili_download_and_process(
     meta_info: dict | None,
     target_qn: int | None = None,
     sessdata: str | None = None,
+    asr_language: str | None = None,
 ):
     """后台任务：下载 B 站视频 -> 抽音频 -> 派发 Worker（保留旧入口，转发到通用实现）。"""
     await _run_url_download_and_process(
@@ -2018,6 +2052,7 @@ async def _run_bilibili_download_and_process(
         ),
         download_start_msg="正在从哔哩哔哩下载视频…",
         download_fail_msg="哔哩哔哩视频下载失败，请检查链接或稍后重试。",
+        asr_language=asr_language,
     )
 
 
@@ -2041,6 +2076,8 @@ async def upload_bilibili(req: BilibiliUploadRequest, request: Request):
         raise HTTPException(status_code=400, detail="请输入有效的哔哩哔哩视频链接或 BV 号。")
 
     ui_language = req.ui_language or "zh-CN"
+    from subtitles.i18n import normalize_asr_language
+    forced_asr_lang = normalize_asr_language(req.asr_language)
 
     request_start_time = time.time()
     if req.client_start_ms:
@@ -2088,7 +2125,7 @@ async def upload_bilibili(req: BilibiliUploadRequest, request: Request):
         file_url=file_url,
         original_file_url=original_file_url,
     )
-    _init_offline_session_context(session_id, ui_language)
+    _init_offline_session_context(session_id, ui_language, asr_language=forced_asr_lang)
 
     asyncio.create_task(
         _run_bilibili_download_and_process(
@@ -2102,6 +2139,7 @@ async def upload_bilibili(req: BilibiliUploadRequest, request: Request):
             meta_info=meta_info,
             target_qn=target_qn,
             sessdata=sessdata,
+            asr_language=forced_asr_lang,
         )
     )
 
@@ -2141,6 +2179,8 @@ async def upload_video(req: VideoUploadRequest, request: Request):
         )
 
     ui_language = req.ui_language or "zh-CN"
+    from subtitles.i18n import normalize_asr_language
+    forced_asr_lang = normalize_asr_language(req.asr_language)
 
     request_start_time = time.time()
     if req.client_start_ms:
@@ -2260,7 +2300,7 @@ async def upload_video(req: VideoUploadRequest, request: Request):
         file_url=file_url,
         original_file_url=original_file_url,
     )
-    _init_offline_session_context(session_id, ui_language)
+    _init_offline_session_context(session_id, ui_language, asr_language=forced_asr_lang)
 
     asyncio.create_task(
         _run_url_download_and_process(
@@ -2274,6 +2314,7 @@ async def upload_video(req: VideoUploadRequest, request: Request):
             download_fn=download_fn,
             download_start_msg=download_start_msg,
             download_fail_msg=download_fail_msg,
+            asr_language=forced_asr_lang,
         )
     )
 
@@ -2314,19 +2355,27 @@ def resolve_task_media_path(session_id: str) -> tuple[str, str] | None:
     return None
 
 
-def resolve_original_video_path(session_id: str) -> str | None:
-    """投稿抽帧用原视频：优先 uploads 原片，找不到再回退字幕成片。"""
+def resolve_original_upload_video(session_id: str) -> tuple[str, str] | None:
+    """uploads 原片（不含字幕成片）。返回 (绝对路径, media_type)。"""
     for path, ext in collect_upload_paths_for_session(session_id):
         if ext in VIDEO_EXTENSIONS and os.path.isfile(path) and os.path.getsize(path) > 64:
-            return path
+            return path, MEDIA_TYPE_BY_EXT.get(ext, "application/octet-stream")
 
     task_row = upload_task_store.get_task(UPLOAD_TASKS_DB_PATH, session_id) or {}
     original_url = str(task_row.get("original_file_url") or "").split("?", 1)[0]
     if original_url.startswith("/files/"):
         candidate = os.path.join(UPLOAD_DIR, os.path.basename(original_url))
-        if os.path.isfile(candidate) and os.path.getsize(candidate) > 64:
-            return candidate
+        ext = os.path.splitext(candidate)[1].lower()
+        if ext in VIDEO_EXTENSIONS and os.path.isfile(candidate) and os.path.getsize(candidate) > 64:
+            return candidate, MEDIA_TYPE_BY_EXT.get(ext, "application/octet-stream")
+    return None
 
+
+def resolve_original_video_path(session_id: str) -> str | None:
+    """投稿抽帧用原视频：优先 uploads 原片，找不到再回退字幕成片。"""
+    resolved = resolve_original_upload_video(session_id)
+    if resolved:
+        return resolved[0]
     subtitled_path = os.path.join(CACHE_DIR, f"{session_id}_subtitled.mp4")
     if os.path.isfile(subtitled_path) and os.path.getsize(subtitled_path) > 64:
         return subtitled_path
@@ -2369,6 +2418,42 @@ def _publish_cover_status(task_id: str, cached: dict | None = None) -> dict:
             if ok
         },
     }
+
+
+@app.get("/media/{session_id}/original")
+async def serve_original_media(
+    session_id: str,
+    client_user_id: str | None = Query(None),
+    download_original: int | None = Query(None),
+):
+    """原视频专用端点：FileResponse + Range，避免 StaticFiles 中途断流。"""
+    if not await task_manager.verify_access(session_id, client_user_id):
+        raise HTTPException(status_code=403, detail="无权访问该媒体文件")
+    resolved = resolve_original_upload_video(session_id)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="原视频不存在")
+    media_path, media_type = resolved
+    if download_original:
+        record_client_click(
+            action="download_original_video",
+            client_user_id=client_user_id,
+            task_id=session_id,
+            label="下载原视频",
+            source="media_serve",
+            meta={"download_original": True},
+        )
+    task_row = upload_task_store.get_task(UPLOAD_TASKS_DB_PATH, session_id) or {}
+    display_name = os.path.basename(str(task_row.get("file_name") or "")) or os.path.basename(media_path)
+    src_ext = os.path.splitext(media_path)[1]
+    if src_ext and not os.path.splitext(display_name)[1]:
+        display_name = f"{display_name}{src_ext}"
+    return FileResponse(
+        media_path,
+        media_type=media_type,
+        filename=display_name,
+        content_disposition_type="attachment" if download_original else "inline",
+        headers={"Accept-Ranges": "bytes", "Cache-Control": "private, max-age=604800"},
+    )
 
 
 @app.get("/media/{session_id}/subtitled")

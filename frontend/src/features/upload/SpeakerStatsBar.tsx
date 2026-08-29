@@ -8,6 +8,7 @@ interface SpeakerStatsBarProps {
   activeSpeakerId: string | null
   detectedLang?: string
   detectedLangName?: string
+  langForced?: boolean
   onToggleSpeaker: (speakerId: string) => void
   onDeleteSpeaker: (speakerId: string) => void
 }
@@ -17,6 +18,7 @@ export function SpeakerStatsBar({
   activeSpeakerId,
   detectedLang,
   detectedLangName,
+  langForced,
   onToggleSpeaker,
   onDeleteSpeaker,
 }: SpeakerStatsBarProps) {
@@ -99,7 +101,7 @@ export function SpeakerStatsBar({
           </span>
           {showLang ? (
             <span id="lang-detect-label" className="overview-meta-text" style={{ marginTop: 2 }}>
-              {t('langDetect')}
+              {langForced ? t('langForced') : t('langDetect')}
               {detectedLangName || detectedLang}
             </span>
           ) : null}

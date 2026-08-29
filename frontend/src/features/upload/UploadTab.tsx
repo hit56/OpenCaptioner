@@ -46,12 +46,20 @@ import {
 } from './taskProgress'
 import { useAppState } from '../../app/AppState'
 import { logUserClick } from '../../services/clickLog'
+import {
+  ASR_LANGUAGE_OPTIONS,
+  asrLanguageLabelKey,
+  loadAsrLanguage,
+  saveAsrLanguage,
+  type AsrLanguageCode,
+} from './asrLanguage'
 
 const MAX_UPLOAD_FILES = 6
 
 interface QueueItem {
   id: string
   file: File
+  asrLanguage: AsrLanguageCode
 }
 
 function hasActiveUploadWork(tasks: UploadTaskResult[], processing: boolean, queueLen: number): boolean {
@@ -140,6 +148,9 @@ export function UploadTab() {
   const [biliSubmitting, setBiliSubmitting] = useState(false)
   const [biliError, setBiliError] = useState<string | null>(null)
   const [uploadLimitNotice, setUploadLimitNotice] = useState<string | null>(null)
+  const [asrLang, setAsrLang] = useState<AsrLanguageCode>(loadAsrLanguage)
+  const asrLangRef = useRef(asrLang)
+  asrLangRef.current = asrLang
   const [historyLoading, setHistoryLoading] = useState(true)
   const { timerText, startTimer, resumeTimer, stopTimer, resetTimerClocks, getTimerClocks } =
     useGlobalStageTimer(t('totalTime'))
@@ -347,22 +358,24 @@ export function UploadTab() {
               }))
             : []
           const langCode = data.detected_lang ? String(data.detected_lang) : undefined
+          const serverForced = Boolean(data.lang_forced)
           const langName = isValidDetectedLang(langCode)
             ? data.detected_lang_name
               ? String(data.detected_lang_name)
               : langCode
             : undefined
           setTasks((prev) =>
-            prev.map((task) =>
-              task.taskId === taskId
-                ? {
-                    ...task,
-                    speakerStats: speakers,
-                    detectedLang: langName ? langCode : undefined,
-                    detectedLangName: langName,
-                  }
-                : task,
-            ),
+            prev.map((task) => {
+              if (task.taskId !== taskId) return task
+              const keepForced = Boolean(task.langForced) && !serverForced
+              return {
+                ...task,
+                speakerStats: speakers,
+                detectedLang: keepForced ? task.detectedLang : langName ? langCode : undefined,
+                detectedLangName: keepForced ? task.detectedLangName : langName,
+                langForced: task.langForced || serverForced,
+              }
+            }),
           )
         }
         if (data.type === 'segment_raw' || data.type === 'segment_final') {
@@ -613,21 +626,26 @@ export function UploadTab() {
 
     void (async () => {
       try {
-        const queued = await uploadFileWithProgress(current.file, lang, ({ percent, speedMbps, startMs }) => {
-          uploadStartMsRef.current = startMs
-          setTasks((prev) =>
-            prev.map((task) =>
-              task.taskId === current.id
-                ? {
-                    ...task,
-                    uploadPhase: 'uploading' as const,
-                    uploadPercent: percent,
-                    message: t('uploadSpeed').replace('{0}', speedMbps.toFixed(2)),
-                  }
-                : task,
-            ),
-          )
-        })
+        const queued = await uploadFileWithProgress(
+          current.file,
+          lang,
+          ({ percent, speedMbps, startMs }) => {
+            uploadStartMsRef.current = startMs
+            setTasks((prev) =>
+              prev.map((task) =>
+                task.taskId === current.id
+                  ? {
+                      ...task,
+                      uploadPhase: 'uploading' as const,
+                      uploadPercent: percent,
+                      message: t('uploadSpeed').replace('{0}', speedMbps.toFixed(2)),
+                    }
+                  : task,
+              ),
+            )
+          },
+          current.asrLanguage,
+        )
         if (queued.status !== 'queued') throw new Error(t('uploadError'))
 
         const newTask: UploadTaskResult = {
@@ -644,6 +662,13 @@ export function UploadTab() {
           fullText: '',
           segments: [],
           createdAt: queued.created_at || new Date().toISOString(),
+          ...(current.asrLanguage !== 'auto'
+            ? {
+                detectedLang: current.asrLanguage,
+                detectedLangName: t(asrLanguageLabelKey(current.asrLanguage) || current.asrLanguage),
+                langForced: true,
+              }
+            : {}),
         }
         setTasks((prev) => prev.map((task) => (task.taskId === current.id ? newTask : task)))
         setSelectedTaskId((prev) => (prev === current.id ? queued.task_id : prev))
@@ -696,7 +721,12 @@ export function UploadTab() {
     }
     dispatch({ type: 'toggle-sidebar-open', open: true })
     dispatch({ type: 'toggle-upload-history', open: true })
-    const newItems = accepted.map((file) => ({ id: crypto.randomUUID(), file }))
+    const langAtSelect = asrLangRef.current
+    const newItems = accepted.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      asrLanguage: langAtSelect,
+    }))
     setFileNames(accepted.map((f) => f.name).join(', '))
     batchStatsRef.current = { audio: 0, proc: 0, total: 0 }
     clearUploadProgress()
@@ -901,7 +931,8 @@ export function UploadTab() {
       meta: { url },
     })
     try {
-      const queued = await uploadVideoUrl(url, lang)
+      const selectedAsrLang = asrLangRef.current
+      const queued = await uploadVideoUrl(url, lang, selectedAsrLang)
       if (queued.status !== 'queued' || !queued.task_id) {
         throw new Error(t('biliSubmitError'))
       }
@@ -926,6 +957,13 @@ export function UploadTab() {
         fullText: '',
         segments: [],
         createdAt: queued.created_at || new Date().toISOString(),
+        ...(selectedAsrLang !== 'auto'
+          ? {
+              detectedLang: selectedAsrLang,
+              detectedLangName: t(asrLanguageLabelKey(selectedAsrLang) || selectedAsrLang),
+              langForced: true,
+            }
+          : {}),
       }
       setTasks((prev) => [newTask, ...prev])
       setSelectedTaskId(queued.task_id)
@@ -993,6 +1031,31 @@ export function UploadTab() {
             {t('uploadHint')}
           </label>
           <span id="file-name-display">{fileNames || t('noFileSelected')}</span>
+          <label className="asr-lang-picker" htmlFor="asr-lang-select">
+            <span className="asr-lang-picker-label">{t('asrLangLabel')}</span>
+            <select
+              id="asr-lang-select"
+              className="asr-lang-select"
+              value={asrLang}
+              disabled={uploadLocked}
+              title={t('asrLangHint')}
+              data-click-action="select_asr_language"
+              data-click-label={t('asrLangLabel')}
+              data-click-tab="upload"
+              onChange={(e) => {
+                const next = e.target.value as AsrLanguageCode
+                asrLangRef.current = next
+                setAsrLang(next)
+                saveAsrLanguage(next)
+              }}
+            >
+              {ASR_LANGUAGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {t(option.labelKey)}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
         <p
           className="upload-multi-hint"

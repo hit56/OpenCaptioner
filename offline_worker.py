@@ -29,6 +29,7 @@ import utils
 from functools import lru_cache
 from qwen_asr_adapter import (
     QwenOfflineASR,
+    infer_language_from_text,
     normalize_qwen_language,
     normalize_ui_language,
     qwen_language_name_from_code,
@@ -39,6 +40,7 @@ from qwen_asr_adapter import (
     ui_language_name_from_code,
 )
 from subtitles.artifact_sync import sync_session_artifacts_to_gateway
+from subtitles.i18n import normalize_asr_language
 from subtitles.wrap import format_elapsed_time
 
 os.environ["MODELSCOPE_DISABLE_UPDATE"] = "1"
@@ -207,6 +209,7 @@ async def offline_task_worker(worker_id: int):
                     req.request_start_time,
                     req.ui_language,
                     req.callback_url or "",
+                    asr_language=req.asr_language,
                 )
             finally:
                 for temp_path in fetch_temp_files:
@@ -549,23 +552,28 @@ def _resolve_detected_language(sensevoice_lang, qwen_lang):
     sv = (sensevoice_lang or "unknown").strip()
     qw = (qwen_lang or "unknown").strip()
 
-    if qw not in ("unknown", "nospeech"):
-        # SenseVoice has no Thai tag; Qwen is authoritative for out-of-tag languages.
-        if qw not in SENSEVOICE_LANG_TAGS:
-            return qw
+    # Qwen LID is itself a free-form transcription. On singing it often "translates"
+    # lyrics into English/Chinese/Korean and then mis-tags the language. SenseVoice
+    # is the dedicated LID model for ja/zh/en/ko — trust it for those tags.
+    if qw not in ("unknown", "nospeech") and qw not in SENSEVOICE_LANG_TAGS:
+        return qw
 
-        # SenseVoice often confuses Thai (and similar) with Cantonese.
-        if sv == "yue" and qw not in CHINESE_FAMILY_LANGS:
-            return qw
+    # SenseVoice often confuses Thai (and similar) with Cantonese.
+    if sv == "yue" and qw not in ("unknown", "nospeech") and qw not in CHINESE_FAMILY_LANGS:
+        return qw
 
-        # SenseVoice may tag non-Chinese speech as Mandarin/Cantonese.
-        if sv in CHINESE_FAMILY_LANGS and qw not in CHINESE_FAMILY_LANGS.union({"en", "ja", "ko"}):
-            return qw
+    # SenseVoice may tag non-Chinese speech as Mandarin/Cantonese.
+    if (
+        sv in CHINESE_FAMILY_LANGS
+        and qw not in ("unknown", "nospeech")
+        and qw not in CHINESE_FAMILY_LANGS.union({"en", "ja", "ko"})
+    ):
+        return qw
 
-    if sv in SENSEVOICE_HIGH_TRUST_LANGS and qw in ("unknown", sv):
+    if sv in SENSEVOICE_HIGH_TRUST_LANGS:
         return sv
 
-    if sv == "yue" and qw in CHINESE_FAMILY_LANGS.union({"unknown", "nospeech"}):
+    if sv == "yue":
         return "yue"
 
     if qw not in ("unknown", "nospeech"):
@@ -574,9 +582,76 @@ def _resolve_detected_language(sensevoice_lang, qwen_lang):
     return sv
 
 
-def refine_session_lang_from_text(session_lang, final_results_list):
-    from subtitles.i18n import infer_language_from_text
+_JA_KANA_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+_KO_HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
+_HAN_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+_THAI_RE = re.compile(r"[\u0e00-\u0e7f]")
 
+
+def _script_counts(text):
+    t = text or ""
+    return {
+        "ja": len(_JA_KANA_RE.findall(t)),
+        "ko": len(_KO_HANGUL_RE.findall(t)),
+        "zh": len(_HAN_RE.findall(t)),
+        "en": len(_LATIN_RE.findall(t)),
+        "th": len(_THAI_RE.findall(t)),
+    }
+
+
+def _text_script_conflicts(text, lang):
+    """True when a segment is dominated by a script that doesn't match the locked language."""
+    counts = _script_counts(text)
+    if lang == "ja":
+        native = counts["ja"] + counts["zh"]
+        foreign = counts["en"] + counts["ko"] + counts["th"]
+        return foreign >= 12 and foreign > native
+    if lang == "ko":
+        native = counts["ko"]
+        foreign = counts["en"] + counts["ja"] + counts["th"]
+        return foreign >= 12 and foreign > native
+    if lang in ("zh", "yue"):
+        native = counts["zh"]
+        foreign = counts["en"] + counts["ja"] + counts["ko"] + counts["th"]
+        return foreign >= 12 and foreign > native
+    if lang == "en":
+        native = counts["en"]
+        foreign = counts["ja"] + counts["ko"] + counts["zh"] + counts["th"]
+        return foreign >= 12 and foreign > native
+    return False
+
+
+def _stabilize_qwen_transcripts(paths, texts, session_lang, lang_forced=False):
+    """Lock language from kana/hangul and re-decode segments that look translated."""
+    locked = session_lang
+    if not lang_forced:
+        combined = " ".join((t or "").strip() for t in texts).strip()
+        inferred = infer_language_from_text(combined)
+        if inferred in ("ja", "ko") and locked in ("zh", "yue", "en", "unknown", "nospeech", ""):
+            locked = inferred
+
+    force_name = qwen_language_name_from_code(locked)
+    if not force_name:
+        return locked, texts
+
+    if locked != session_lang:
+        retry_idx = list(range(len(texts)))
+    else:
+        retry_idx = [i for i, t in enumerate(texts) if _text_script_conflicts(t, locked)]
+    if not retry_idx:
+        return locked, texts
+
+    retry_paths = [paths[i] for i in retry_idx]
+    retry_res = qwen_file_asr_model.transcribe(audio=retry_paths, language=force_name)
+    new_texts = list(texts)
+    if retry_res:
+        for j, item in enumerate(retry_res):
+            new_texts[retry_idx[j]] = getattr(item, "text", "") or new_texts[retry_idx[j]]
+    return locked, new_texts
+
+
+def refine_session_lang_from_text(session_lang, final_results_list):
     combined = " ".join(
         (item.get("text") or "").strip() for item in (final_results_list or [])
     ).strip()
@@ -589,6 +664,10 @@ def refine_session_lang_from_text(session_lang, final_results_list):
 
     # Correct audio mislabels (e.g. Thai detected as Cantonese) using transcript script.
     if session_lang == "yue" and inferred not in CHINESE_FAMILY_LANGS:
+        return inferred
+
+    # Japanese/Korean songs are often tagged zh/en because Qwen "translates" the chorus.
+    if inferred in ("ja", "ko") and session_lang in ("zh", "yue", "en", "unknown", "nospeech"):
         return inferred
 
     if session_lang not in ("nospeech", "unknown"):
@@ -613,6 +692,14 @@ def detect_language_from_vad_segments(audio_float, vad_segments):
             continue
         detect_audio = _clip_lang_detect_audio(detect_audio)
         sensevoice_lang, raw_text = _sensevoice_detect_lang_tag(detect_audio)
+        stripped = re.sub(r"<\|[^|]+\|>", "", raw_text or "")
+        script_lang = infer_language_from_text(stripped)
+        if script_lang in ("ja", "ko") and sensevoice_lang != script_lang:
+            server_log.logger.info(
+                f"SenseVoice 脚本纠正: {sensevoice_lang} -> {script_lang} "
+                f"(raw={raw_text[:80] if raw_text else ''})"
+            )
+            sensevoice_lang = script_lang
         server_log.logger.info(
             f"SenseVoice 语种检测样本 {idx}/{len(sample_segs)}: {sensevoice_lang} "
             f"(raw={raw_text[:80] if raw_text else ''})"
@@ -693,6 +780,7 @@ class ProcessRequest(BaseModel):
     fast_mode: bool = False
     request_start_time: float | None = None
     ui_language: str | None = "zh-CN"
+    asr_language: str | None = None
     file_fetch_url: str | None = None
     callback_url: str | None = None
 
@@ -760,10 +848,15 @@ def push_event(callback_url: str, session_id, event_type, data):
 # ==========================================
 # 核心：后台处理函数 (fast_mode会跳过声纹识别、全局声纹合并、性别检测)
 # ==========================================
-def background_transcribe_process(session_id, filepath, original_filename, fast_mode=False, request_start_time=None, ui_language="zh-CN", callback_url=""):
+def background_transcribe_process(session_id, filepath, original_filename, fast_mode=False, request_start_time=None, ui_language="zh-CN", callback_url="", asr_language=None):
 
     ui_language = normalize_ui_language(ui_language)
-    server_log.logger.info(f"[{session_id}] >>> 后台任务启动: {original_filename} | ui_language={ui_language}")
+    forced_asr_lang = normalize_asr_language(asr_language)
+    lang_forced = bool(forced_asr_lang)
+    server_log.logger.info(
+        f"[{session_id}] >>> 后台任务启动: {original_filename} | "
+        f"ui_language={ui_language} asr_language={forced_asr_lang or 'auto'}"
+    )
     proc_start_time = time.time()
     temp_files_to_delete = []
     stage_timings = {
@@ -1133,14 +1226,30 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
 
         # =======================================================
         # [新增] 1.6 智能语种检测（复用上面的 VAD 结果）
+        # 用户指定 asr_language 时锁定该语种，跳过自动检测。
         # =======================================================
         session_lang = "zh"
-        if not fast_mode:
-            push_event("progress", {"message": "正在检测音频语种（长视频可能需要几分钟）..."})
         language_detect_start = time.perf_counter()
-        session_lang = detect_language_from_vad_segments(audio_float, optimized_vad_segments)
+        if lang_forced:
+            session_lang = forced_asr_lang
+            lang_name = qwen_language_display_name_zh(session_lang)
+            if not fast_mode:
+                push_event("progress", {
+                    "message": (
+                        f"Language locked: {lang_name}"
+                        if ui_language == "en"
+                        else f"已锁定语种：{lang_name}，跳过自动检测"
+                    ),
+                })
+            server_log.logger.info(
+                f"[{session_id}] 用户指定识别语种: {session_lang}，跳过自动检测"
+            )
+        else:
+            if not fast_mode:
+                push_event("progress", {"message": "正在检测音频语种（长视频可能需要几分钟）..."})
+            session_lang = detect_language_from_vad_segments(audio_float, optimized_vad_segments)
+            server_log.logger.info(f"[{session_id}] 智能检测语种结果: {session_lang}")
         record_stage("language_detect_s", language_detect_start)
-        server_log.logger.info(f"[{session_id}] 智能检测语种结果: {session_lang}")
 
         # =======================================================
         # [新增] 1.7 歌曲/音乐内容检测
@@ -1733,6 +1842,7 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                 "speakers": final_stats_list,
                 "detected_lang": session_lang,
                 "detected_lang_name": qwen_language_display_name_zh(session_lang),
+                "lang_forced": lang_forced,
             })
         
         if not fast_mode:
@@ -1820,12 +1930,23 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                     # 其他外语 或 歌曲/音乐内容 统一切换到 Qwen3-ASR-1.7B。
                     asr_engine = "Qwen3-ASR-1.7B"
                     asr_start = time.perf_counter()
+                    qwen_lang_name = qwen_language_name_from_code(session_lang)
+                    if lang_forced and not qwen_lang_name:
+                        qwen_lang_name = session_lang
                     qwen_res = qwen_file_asr_model.transcribe(
                         audio=b_paths,
-                        language=qwen_language_name_from_code(session_lang),
+                        language=qwen_lang_name,
                     )
-                    record_stage("asr_s", asr_start)
                     raw_texts = [getattr(item, 'text', '') or '' for item in qwen_res] if qwen_res else [""] * len(b_paths)
+                    locked_lang, raw_texts = _stabilize_qwen_transcripts(
+                        b_paths, raw_texts, session_lang, lang_forced=lang_forced
+                    )
+                    if locked_lang != session_lang:
+                        server_log.logger.info(
+                            f"[{session_id}] Qwen 语种锁定: {session_lang} -> {locked_lang}"
+                        )
+                        session_lang = locked_lang
+                    record_stage("asr_s", asr_start)
 
                 future_map = {}
                 batch_raw_items = [None] * len(raw_texts) # 初始化
@@ -1844,7 +1965,13 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                     test_text = re.sub(r'[^\w\u4e00-\u9fa5]', '', clean_text)
                     is_hallucination = any(h in test_text for h in HALLUCINATION_LIST)
                     
-                    # fast_mode 在最终收敛阶段再打标点，这里直接用原始文本，减少请求次数。
+                    # 日/韩等外语不要走中文标点模型，避免把歌词改坏。
+                    use_punct = (
+                        not fast_mode
+                        and len(clean_text) >= 2
+                        and not is_hallucination
+                        and session_lang in ("zh", "yue", "en")
+                    )
                     if fast_mode:
                         batch_raw_items[local_i] = {
                             "local_i": local_i,
@@ -1857,8 +1984,7 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                             "id": b_ids[local_i],
                             "speaker": b_speakers[local_i]
                         }
-                    # 提交标点任务 (只有长度>=2 且 不是幻觉 才处理)
-                    elif len(clean_text) >= 2 and not is_hallucination:
+                    elif use_punct:
                         fut = executor.submit(
                             process_segment_with_punctuation,
                             clean_text,
@@ -1868,6 +1994,18 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                         )
                         future_map[fut] = local_i
                         
+                        batch_raw_items[local_i] = {
+                            "local_i": local_i,
+                            "global_idx": global_idx,
+                            "raw_text": clean_text,
+                            "timestamp_str": b_timestamps[local_i],
+                            "sample_range": b_ranges[local_i],
+                            "segment_url": b_urls[local_i],
+                            "file_path": b_paths[local_i],
+                            "id": b_ids[local_i],
+                            "speaker": b_speakers[local_i]
+                        }
+                    elif len(clean_text) >= 2 and not is_hallucination:
                         batch_raw_items[local_i] = {
                             "local_i": local_i,
                             "global_idx": global_idx,
@@ -1897,11 +2035,18 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                         if batch_raw_items[local_i]:
                             punctuated_texts[local_i] = batch_raw_items[local_i]["raw_text"]
 
+                # 日/韩等未走中文标点的片段，直接用 ASR 原文，否则结果全是空串。
+                for item in batch_raw_items:
+                    if item and not (punctuated_texts[item['local_i']] or "").strip():
+                        punctuated_texts[item['local_i']] = item['raw_text']
+
                 # === 顺序扫描与智能合并 (需判断 Speaker 是否一致) ===
                 for item in batch_raw_items:
                     if not item: continue
                     
                     current_punctuated = punctuated_texts[item['local_i']]
+                    if not (current_punctuated or "").strip():
+                        continue
                     current_res = {
                         "index": item['global_idx'],
                         "text": current_punctuated,
@@ -2064,7 +2209,7 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
                             server_log.logger.info(f"[{session_id}]    -> 🤖 大模型 Prompt: '{prompt_input}'")
                             # ================== 【修改点结束】 ==================
 
-                            if fast_mode:
+                            if fast_mode or session_lang not in ("zh", "yue", "en"):
                                 corrected_boundary = prompt_input
                             else:
                                 corrected_boundary = utils.send_request(
@@ -2128,7 +2273,10 @@ def background_transcribe_process(session_id, filepath, original_filename, fast_
             final_data = pending_entry['data']
             finalize_segment(final_data, session_lang)
 
-        refined_lang = refine_session_lang_from_text(session_lang, final_results_list)
+        if lang_forced:
+            refined_lang = session_lang
+        else:
+            refined_lang = refine_session_lang_from_text(session_lang, final_results_list)
         if refined_lang != session_lang:
             server_log.logger.info(
                 f"[{session_id}] ASR 文本推断语种: {session_lang} -> {refined_lang}"
@@ -2240,6 +2388,7 @@ async def trigger_offline_process(req: ProcessRequest):
     pending_after = active_task_count + waiting_after
     server_log.logger.info(
         f"[{WORKER_INSTANCE_TAG}] 任务入队: session={req.session_id} file={req.original_filename} "
+        f"asr_language={req.asr_language or 'auto'} "
         f"active={active_task_count} waiting_before={waiting_before} waiting_after={waiting_after} pending={pending_after}"
     )
     _notify_waiting_queue_positions()
